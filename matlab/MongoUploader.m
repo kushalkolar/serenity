@@ -1,4 +1,8 @@
 % Usage
+%
+% mongo driver
+% javaaddpath("C:\Users\scanimage\Documents\scanimage_scripts\mongo-java-driver-3.12.12.jar")
+%
 % create instance
 % mu = MongoUploader('152.19.100.28', 9050)
 % 
