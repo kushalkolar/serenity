@@ -1,7 +1,3 @@
-% This is slow af with MongoDB because matlab is terrible
-% also because the computer is ancient
-% But gives an idea of how to make a class for sending stuff
-
 classdef FrameSender
    properties
         mc
@@ -20,10 +16,15 @@ classdef FrameSender
       end
       function send(obj, src, evt, vargin)
           lastStripe = src.hSI.hDisplay.stripeDataBuffer{src.hSI.hDisplay.stripeDataBufferPointer};
+          channel = 1;
+          frame0 = lastStripe.roiData{1}.imageData{channel}{1}(:);
+          frame1 = lastStripe.roiData{1}.imageData{2}{1}(:);
 
           doc = com.mongodb.BasicDBObject();
 
-          doc.put("data", jsonencode(lastStripe.roiData{1}.imageData{1}{1}));
+          doc.put("frame0", getByteStreamFromArray(frame0));
+          doc.put("frame1", getByteStreamFromArray(frame1));
+          %doc.put("timestamp", num2str(lastStripe.frameTimestamp));
           doc.put("index", lastStripe.frameNumberAcq);
 
           obj.coll.insert(doc, obj.wc);
