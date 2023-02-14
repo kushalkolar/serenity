@@ -1,2 +1,2 @@
-# realtime-calcium
-Realtime analysis &amp; visualization of calcium imaging data
+# serenity
+Semi-Realtime analysis and visualization of calcium imaging data
