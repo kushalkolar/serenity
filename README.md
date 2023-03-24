@@ -77,3 +77,26 @@ socket = context.createSocket(SocketType.PUSH)
 socket.connect("tcp://152.19.100.28:9050")
 socket.send("yay")
 ```
+
+Benchmarking, send random frames from matlab:
+
+```matlab
+t0 = clock();
+for i = 1:2000
+  a = int16(randi(512, 512));
+  socket.send(getByteStreamFromArray(a));
+end
+clock() - t0
+```
+
+This gives ~6.4 seconds, or ~300 frames/s
+
+```python
+l = list()
+while True:
+    t0 = time()
+    b = sub.recv()
+    l.append(time() - t0)
+```
+
+This results in a median delay of ~0.0044 s between frames, or ~225 frames/second, which is just below the theoretical max of 238 for a 1 gigabit connection since 125 MB / (512 * 512 * 2) = 238. 125MB = 1 gigabit.
