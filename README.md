@@ -10,13 +10,14 @@ WIP
 
 Build [`jeromq`](https://github.com/zeromq/jeromq) using maven on linux and use the jar file on matlab in Windows. I was not able to build on windows.
 
-1. Install OpenJDK 8 on linux. Newer versions of Java beyond v8 do not work in matlab! asically just unpack this tar.gz file and then export the unpacked path as `JAVA_HOME` and set the `PATH` to the `bin` dir, and `LD_LIBRARY_PATH` to the `lib` dir: https://adoptium.net/temurin/releases/ 
+1. Install OpenJDK 8 on linux. Newer versions of Java beyond v8 do not work in matlab! basically just unpack this tar.gz file and then export the unpacked path as `JAVA_HOME` and set the `PATH` to the `bin` dir, and `LD_LIBRARY_PATH` to the `lib` dir: https://adoptium.net/temurin/releases/ 
 
 2. Install maven and make sure it binds to java 8: https://dlcdn.apache.org/maven/maven-3/3.9.1/binaries/apache-maven-3.9.1-bin.zip
 
 ```sh
 export JAVA_HOME=...
 export PATH=...
+export LD_LIBRARY_PATH=...
 sudo apt install maven
 mvn --version
 ```
@@ -30,6 +31,8 @@ Java version: 1.8.0_362, vendor: Temurin, runtime: /home/kushalk/Downloads/jdk8u
 Default locale: en_US, platform encoding: UTF-8
 OS name: "linux", version: "5.10.0-21-amd64", arch: "amd64", family: "unix"
 ```
+
+Make sure it says **Java version: 1.8.x**, 1.8 is Java 8 apparently.
 
 3. Build `jeromq`
 
