@@ -1,12 +1,18 @@
+% zmq client to communicate with improv ScanImageReceiver actor
+% 
 % Usage
-%
+% Make sure "serenity/matlab" is in the matlab path
+% 
 % Create SerenityClient instance
-% address & port is for the ScanImageReceiver actor on the workstation
-% sc = SerenityClient("tcp://152.19.100.28:9050")
+% sc = SerenityClient("tcp://hantman-workstation:9050")
+%
+% setup acquisition metadata
 % set and run `make_acq_metadata.m`
 % prepare acquisition with the `acq_metadata` generated from `make_acq_metadata.m`
 % sc.prep_acq(acq_metadata)
-% make sure send frames is in UserFunctions, begin grabbing frames
+%
+% make sure serenity_frame_sender is in UserFunctions, begin grabbing frames
+%
 % end acquisition
 % sc.end_acq()
 
@@ -21,6 +27,9 @@ classdef SerenityClient
 
     methods
         function obj = SerenityClient(address)
+            % address: tcp address and port of server
+            % example: tcp://152.19.100.28:9050
+            
             % path to jeromq jar file compiled for java8
             % newer java doesn't work on matlab
             jar_path = fullfile(erase(mfilename("fullpath"), mfilename), "/jeromq-0.5.3_java8.jar");
@@ -31,12 +40,12 @@ classdef SerenityClient
             % connect to server, client is in PUSH configuration
             obj.context = ZContext();
             obj.socket = obj.context.createSocket(SocketType.PUSH);
-            disp(address)
             obj.socket.connect(address);
             obj.acq_ready = false;
 
             obj.ZMsg = ZMsg;
             disp("Successfully connected!")
+            disp(address)
         end
 
         function prep_acq(obj, metadata)
@@ -51,9 +60,10 @@ classdef SerenityClient
             obj.acq_metadata = metadata;
         end
 
-        function send_frame(obj, src, evt, vargin)
+        function send_frame(obj, src)
             % sends frame to zmq socket
-            % src: hSI object
+            % src: scanimage hSI object
+
 %             if obj.acq_ready ~= true
 %                 ex = MException("Acquisition is not preped. Call pre_acq() first.");
 %                 throw(ex)
@@ -87,6 +97,8 @@ classdef SerenityClient
         end
 
         function speed_test(obj, src, n_frames)
+                % srs: scanimage hSI object
+                % n_frames: number of frames to send
             tic;
             for i = 1:n_frames
                 obj.send_frame(src);

@@ -30,4 +30,3 @@ channel_metadata{2}.genotype = "";
 acq_metadata.database = "/data/kushal/layer1-mesmerize";
 acq_metadata.animal_id = "mouse_1";
 acq_metadata.channels = channel_metadata;
-
