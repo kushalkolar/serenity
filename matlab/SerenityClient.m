@@ -14,7 +14,9 @@ classdef SerenityClient
     properties
         context
         socket
+        acq_metadata
         acq_ready
+        ZMsg
     end
 
     methods
@@ -32,6 +34,8 @@ classdef SerenityClient
             disp(address)
             obj.socket.connect(address);
             obj.acq_ready = false;
+
+            obj.ZMsg = ZMsg;
             disp("Successfully connected!")
         end
 
@@ -44,21 +48,52 @@ classdef SerenityClient
             % TODO: Would be nice to receive validation response from server
             obj.acq_ready = true;
             disp("Acquisition data sent, check if received on server")
+            obj.acq_metadata = metadata;
         end
 
         function send_frame(obj, src, evt, vargin)
-            if obj.acq_ready ~= true
-                ex = MException("Acquisition is not preped. Call pre_acq() first.");
-                throw(ex)
+            % sends frame to zmq socket
+            % src: hSI object
+%             if obj.acq_ready ~= true
+%                 ex = MException("Acquisition is not preped. Call pre_acq() first.");
+%                 throw(ex)
+%             end
+            % get data from scanimage
+            last_stripe = src.hSI.hDisplay.stripeDataBuffer{src.hSI.hDisplay.stripeDataBufferPointer};
+
+            msg = obj.ZMsg();
+            % frame index
+            msg.add(getByteStreamFromArray(uint32(last_stripe.frameNumberAcq)));
+            % trial index
+            msg.add(getByteStreamFromArray(uint32(0)));
+            % trigger state
+            msg.add(getByteStreamFromArray(uint32(0)));
+            % timestamp
+            msg.add(getByteStreamFromArray(single(last_stripe.frameTimestamp)));
+
+            % frame data
+            for channel_ix = last_stripe.roiData{1}.channels
+                msg.add(getByteStreamFromArray(last_stripe.roiData{1}.imageData{channel_ix}{1}(:)));
             end
-            lastStripe = src.hSI.hDisplay.stripeDataBuffer{src.hSI.hDisplay.stripeDataBufferPointer};
-            % TODO
+
+            % send
+            msg.send(obj.socket);
         end
 
         function end_acq(obj)
             obj.acq_ready = false;
             obj.socket.send("acquisition-end")
             disp("Acquisition ended")
+        end
+
+        function speed_test(obj, src, n_frames)
+            tic;
+            for i = 1:n_frames
+                obj.send_frame(src);
+            end
+            t = toc;
+            disp("rate: ")
+            disp(n_frames / t)
         end
     end
 end
