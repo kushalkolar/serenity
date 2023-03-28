@@ -20,19 +20,16 @@ class ScanImageReceiver(Actor):
     """
     def __init__(
             self,
-            addr_acq: str,
-            addr_frames: str,
+            address: str = "tcp://0.0.0.0:9050",
             *args,
             **kwargs
     ):
         """
         Parameters
         ----------
-        addr_acq: str
-            zmq address for receiving acquisition metadata, example: ``"tcp://127.0.0.1:5555"``
+        address: str, default ``"tcp://0.0.0.0:9050"``
+            Address that zmq server will listen on for receiving data from scanimage
 
-        addr_frames: str
-            zmq address for receiving frames with their headers
         """
 
         super().__init__(*args, **kwargs)
@@ -41,7 +38,7 @@ class ScanImageReceiver(Actor):
         self.context_acq = zmq.Context()
         self.zmq_pull = self.context_acq.socket(zmq.PULL)
         self.zmq_pull.setsockopt(zmq.BACKLOG, 1_000)
-        self.zmq_pull.bind("tcp://0.0.0.0:9050")
+        self.zmq_pull.bind(address)
 
     def setup(self):
         logger.info("ScanImageReceiver receiver starting")
@@ -55,10 +52,11 @@ class ScanImageReceiver(Actor):
 
         logger.info("ScanImageReceiver receiver ready!")
 
-    def _receive_bytes(self) -> bytes | None:
+    def _receive_bytes(self) -> List[bytes] | None:
         """
-        Gets the buffer from the publisher
+        Pulls bytes from the socket
         """
+
         try:
             b = self.zmq_pull.recv_multipart(zmq.NOBLOCK)
         except zmq.Again:
@@ -68,10 +66,10 @@ class ScanImageReceiver(Actor):
 
     def runStep(self):
         """
-        Receives data from zmq publisher, puts it in the queue.
+        Receives data from zmq socket, puts it in the queue.
 
         We assume that actors which utilize this array will parse
-        the header and frame themselves from the buffer.
+        the header and frame themselves from raw bytes.
         """
 
         # TODO: make sure we don't have a memory leak here
