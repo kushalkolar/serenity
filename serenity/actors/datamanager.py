@@ -8,7 +8,7 @@ import zmq
 
 from improv.actor import Actor
 
-from .metadata import AcquisitionMetadata, TwoPhotonFrame
+from ..io import AcquisitionMetadata, TwoPhotonFrame
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -51,6 +51,8 @@ class ScanImageReceiver(Actor):
 
         # TODO: put acquisition metadata in store
 
+        self.acquisition_metadata: AcquisitionMetadata = None
+
         logger.info("ScanImageReceiver receiver ready!")
 
     def _receive_bytes(self) -> bytes | None:
@@ -58,7 +60,7 @@ class ScanImageReceiver(Actor):
         Gets the buffer from the publisher
         """
         try:
-            b = self.zmq_pull.recv(zmq.NOBLOCK)
+            b = self.zmq_pull.recv_multipart(zmq.NOBLOCK)
         except zmq.Again:
             pass
         else:
@@ -72,12 +74,14 @@ class ScanImageReceiver(Actor):
         the header and frame themselves from the buffer.
         """
 
-        buff = self._receive_bytes()
+        # TODO: make sure we don't have a memory leak here
+        b = self._receive_bytes()
+        frame = TwoPhotonFrame.from_zmq_multipart(b, self.acquisition_metadata)
 
-        if buff is None:
+        if b is None:
             return
 
-        self.q_out.put(buff)
+        self.q_out.put(frame.to_bytes())
 
 
 class MesmerizeWriter(Actor):
