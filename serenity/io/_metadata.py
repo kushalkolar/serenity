@@ -76,6 +76,7 @@ class AcquisitionMetadata:
     framerate: float
     date: str
     scanimage_meta: dict = None
+    comments: str = None
 
     # TODO: we could just use a yaml config or something for this long term
     # these are in order
