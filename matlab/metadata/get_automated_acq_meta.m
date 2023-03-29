@@ -6,7 +6,7 @@ function rval = get_automated_acq_meta(hsi)
     % the scanimage state
     rval.scanimage_meta = get_scanimage_metadata(hsi);
     
-    n_channels = max(hsi.hChannels.channelsActive);
+    n_channels = length(hsi.hChannels.channelsActive);
     channel_metadata = cell(n_channels, 1);
     
     for i = 1:n_channels

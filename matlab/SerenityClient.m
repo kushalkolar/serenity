@@ -50,10 +50,10 @@ classdef SerenityClient
 
         function prep_acq(obj, metadata)
             % prepare acquisition
-            obj.socket.send("acquisition-start-incoming");
+            obj.socket.send("acquisition-prep-incoming");
             acq_meta = jsonencode(metadata);
             obj.socket.send(acq_meta);
-            obj.socket.send("acquisition-start-sent");
+            obj.socket.send("acquisition-prep-sent");
             % TODO: Would be nice to receive validation response from server
             obj.acq_ready = true;
             disp("Acquisition data sent, check if received on server")
@@ -82,7 +82,7 @@ classdef SerenityClient
             msg.add(getByteStreamFromArray(single(last_stripe.frameTimestamp)));
 
             % frame data
-            for channel_ix = last_stripe.roiData{1}.channels
+            for channel_ix = 1:length(last_stripe.roiData{1}.channels)
                 msg.add(getByteStreamFromArray(last_stripe.roiData{1}.imageData{channel_ix}{1}(:)));
             end
 
