@@ -64,6 +64,9 @@ class ScanImageReceiver(Actor):
         else:
             return b
 
+    def _reply_frame_received(self, index: int):
+        pass
+
     def runStep(self):
         """
         Receives data from zmq socket, puts it in the queue.
@@ -74,10 +77,12 @@ class ScanImageReceiver(Actor):
 
         # TODO: make sure we don't have a memory leak here
         b = self._receive_bytes()
-        frame = TwoPhotonFrame.from_zmq_multipart(b, self.acquisition_metadata)
 
         if b is None:
             return
+
+        frame = TwoPhotonFrame.from_zmq_multipart(b, self.acquisition_metadata)
+        self._reply_frame_received(frame.index)
 
         self.q_out.put(frame.to_bytes())
 
