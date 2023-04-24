@@ -16,17 +16,24 @@
 % end acquisition
 % sc.end_acq()
 
-classdef SerenityClient
+classdef SerenityClient < handle
     properties
         context
         socket
         acq_metadata
         acq_ready
         ZMsg
+        parent_buffer_path
+        current_buffer_path
+        bg_pool
+    end
+
+    properties(SetAccess=protected, GetAccess=public)
+        address
     end
 
     methods
-        function obj = SerenityClient(address)
+        function obj = SerenityClient(address, parent_buffer_path)
             % address: tcp address and port of server
             % example: tcp://152.19.100.28:9050
             
@@ -45,7 +52,11 @@ classdef SerenityClient
 
             obj.ZMsg = ZMsg;
             disp("Successfully connected!")
-            disp(address)
+            obj.address = address;
+            disp(obj.address)
+
+            obj.parent_buffer_path = parent_buffer_path;
+            obj.current_buffer_path = "";
         end
 
         function prep_acq(obj, metadata)
@@ -58,6 +69,8 @@ classdef SerenityClient
             obj.acq_ready = true;
             disp("Acquisition data sent, check if received on server")
             obj.acq_metadata = metadata;
+            obj.current_buffer_path = fullfile(obj.parent_buffer_path, "test");
+            mkdir(obj.current_buffer_path)
         end
 
         function send_frame(obj, src)
@@ -88,6 +101,36 @@ classdef SerenityClient
 
             % send
             msg.send(obj.socket);
+        end
+        
+        function new_frame_ready(obj, src)
+            last_stripe = src.hSI.hDisplay.stripeDataBuffer{src.hSI.hDisplay.stripeDataBufferPointer};
+            parfeval(backgroundPool, @obj.write_buffer, 0, last_stripe)
+        end
+
+        function write_buffer(obj, last_stripe)
+            % write frame to buffer on disk
+            % frame index
+            frame_index = getByteStreamFromArray(uint32(last_stripe.frameNumberAcq));
+            
+            fname = strcat(num2str(last_stripe.frameNumberAcq), ".bin");
+            fid = fopen(fullfile(obj.current_buffer_path, fname), "w");
+
+            fwrite(fid, frame_index)
+
+            % trial index
+            fwrite(fid, getByteStreamFromArray(uint32(0)));
+            % trigger state
+            fwrite(fid, getByteStreamFromArray(uint32(0)));
+            % timestamp
+            fwrite(fid, getByteStreamFromArray(single(last_stripe.frameTimestamp)));
+
+            % frame data
+            for channel_ix = 1:length(last_stripe.roiData{1}.channels)
+                fwrite(fid, getByteStreamFromArray(last_stripe.roiData{1}.imageData{channel_ix}{1}(:)));
+            end
+
+            fclose(fid);
         end
 
         function end_acq(obj)
