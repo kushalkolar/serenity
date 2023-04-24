@@ -66,7 +66,7 @@ class ScanImageSender:
             try:
                 reply = self.socket.recv(zmq.NOBLOCK)
             except zmq.Again:
-                await asyncio.sleep(0.01)
+                pass
             else:
                 index = int(reply.decode())
                 self.remove_frame_from_buffer(index)
@@ -79,6 +79,7 @@ class ScanImageSender:
                 self.indices_received.append(index)
             finally:
                 self._check_for_missing_indices()
+                await asyncio.sleep(0.01)
 
     def _check_for_missing_indices(self):
         finished = sorted(self.indices_received)
