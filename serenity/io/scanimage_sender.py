@@ -64,6 +64,8 @@ class ScanImageSender:
     async def reply_loop(self):
         while True:
             try:
+                # TODO: look into socket.poll()
+                # TODO: https://stackoverflow.com/questions/21089269/receive-all-available-messages-from-a-zeromq-pyzmq-socket 
                 reply = self.socket.recv(zmq.NOBLOCK)
             except zmq.Again:
                 pass
