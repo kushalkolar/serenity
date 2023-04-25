@@ -36,9 +36,12 @@ class ScanImageReceiver(Actor):
 
         # for receiving acquisition metadata
         self.context_acq = zmq.Context()
-        self.zmq_pull = self.context_acq.socket(zmq.PULL)
-        self.zmq_pull.setsockopt(zmq.BACKLOG, 1_000)
-        self.zmq_pull.bind(address)
+        self.socket = self.context_acq.socket(zmq.REP)
+        self.socket.setsockopt(zmq.BACKLOG, 1_000)
+        self.socket.bind(address)
+
+        # received frame indices
+        self.received_indices: List[int] = list()
 
     def setup(self):
         logger.info("ScanImageReceiver receiver starting")
@@ -58,14 +61,14 @@ class ScanImageReceiver(Actor):
         """
 
         try:
-            b = self.zmq_pull.recv_multipart(zmq.NOBLOCK)
+            b = self.socket.recv_multipart(zmq.NOBLOCK)
         except zmq.Again:
             pass
         else:
             return b
 
     def _reply_frame_received(self, index: int):
-        pass
+        self.socket.send(index)
 
     def runStep(self):
         """
@@ -84,7 +87,12 @@ class ScanImageReceiver(Actor):
         frame = TwoPhotonFrame.from_zmq_multipart(b, self.acquisition_metadata)
         self._reply_frame_received(frame.index)
 
-        self.q_out.put(frame.to_bytes())
+        # in case a frame was received but the reply wasn't received on the other end
+        if frame.index not in self.received_indices:
+            self.q_out.put(frame.to_bytes())
+        else:
+            # send reply again
+            self._reply_frame_received(frame.index)
 
 
 class MesmerizeWriter(Actor):
