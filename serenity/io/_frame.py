@@ -41,7 +41,8 @@ class TwoPhotonFrame:
     def from_bytes(
             cls,
             data: bytes | bytearray,
-            acq_meta: AcquisitionMetadata
+            acq_meta: AcquisitionMetadata,
+            from_matlab: bool = False
     ):
         """
         Create ``TwoPhotonFrame`` using raw bytes. Parses header and channel data.
@@ -56,12 +57,22 @@ class TwoPhotonFrame:
         acq_meta: AcquisitionMetadata
             acquisition metadata, required to parse the header
 
+        from_matlab: bool
+            if these bytes are from matlab,
+            compensates for the additional bytes that matlab adds to each header element
+
         """
 
         header_parsed = dict()
 
         # parse header
         start_byte = 0
+
+        if from_matlab:
+            # since matlab adds 60 bits of something as a header to each header element
+            # only the last 4 bytes are our actual header element value
+            start_byte += 15 * 4
+
         for element in acq_meta.header_elements:
             # parse the header for this element
             header_parsed[element.name] = np.frombuffer(
@@ -75,7 +86,9 @@ class TwoPhotonFrame:
             start_byte = start_byte + element.nbytes
 
         # parse channels
-        start_byte = acq_meta.nbytes_header
+        if not from_matlab:
+            start_byte = acq_meta.nbytes_header
+
         channels: List[np.ndarray] = list()
 
         for channel in acq_meta.channels:
