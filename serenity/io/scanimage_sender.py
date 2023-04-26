@@ -25,11 +25,14 @@ class SerenityServer:
 
         # frame buffer on SSD
         self.buffer_path = Path(buffer_path)
+        self.current_buffer_path: Path = None
 
         self.indices_received = None
         self.indices_sent = None
         self.current_index_read = None
         self.current_failed_attempt = None
+
+        self.current_uid = None
 
         self.acq_ended = None
         self.last_frame_ix = None
@@ -83,7 +86,7 @@ class SerenityServer:
             now = time()
             try:
                 # uuid from improv for this acquisition
-                uid_reply = self.socket.recv(zmq.NOBLOCK)
+                uid_reply = str(self.socket.recv(zmq.NOBLOCK))
             except zmq.Again:
                 if now - t > 5:
                     msg = "Failed to receive reply for acquisition metadata, try `start_acq()` again."
@@ -97,6 +100,9 @@ class SerenityServer:
                 break
 
         # start frame sending loop
+        self.current_uid = uid_reply
+        self.current_buffer_path = self.buffer_path.joinpath(self.current_uid)
+
         self.acq_ended = False
         self.last_frame_ix = None
         self.send_loop()
