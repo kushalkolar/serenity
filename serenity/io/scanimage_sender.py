@@ -33,6 +33,8 @@ class SerenityServer:
         self.indices_sent = None
         self.current_index_read = None
         self.current_failed_attempt = None
+        self.retries: int = 0
+        self.lingering_files = list()
 
         self.current_uid = None
 
@@ -143,12 +145,13 @@ class SerenityServer:
 
     def send_loop(self):
         while True:
-            clear_output(wait=True)
-            print(
-                f"frame sent: {self.current_index_read}\n"
-                f"failures: {self.current_failed_attempt}\n"
-                f"frame received: {self.current_index_read - 1}"
-            )
+            if self.current_index_read % 50 == 0:
+                clear_output()
+                print(
+                    f"frame sent: {self.current_index_read}\n"
+                    f"retries: {self.retries}\n"
+                    f"frame received: {self.current_index_read - 1}"
+                )
             
             # check if scanimage acq has ended
             self._check_end_acq()
@@ -186,9 +189,13 @@ class SerenityServer:
                     # bad frame
                     if reply.decode("utf-8") == "bad frame":
                         self.current_failed_attempt +=1
+                        self.retries += 1
                         break
                     # remove the replied frame from buffer
-                    self._remove_from_from_buffer(self.current_index_read)
+                    try:
+                        self._remove_from_from_buffer(self.current_index_read)
+                    except:
+                        self.lingering_files.append(self.current_index_read)
                     # increment to next frame
                     self.current_index_read += 1
                     self.current_failed_attempt = 0
