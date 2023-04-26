@@ -71,7 +71,7 @@ class TwoPhotonFrame:
         if from_matlab:
             # since matlab adds 60 bits of something as a header to each header element
             # only the last 4 bytes are our actual header element value
-            start_byte += 15 * 4
+            start_byte += 60
 
         for element in acq_meta.header_elements:
             # parse the header for this element
@@ -83,7 +83,11 @@ class TwoPhotonFrame:
             )
 
             # jump to next header element
-            start_byte = start_byte + element.nbytes
+            start_byte += element.nbytes
+
+            # add the 60 bits for matlab weirdness
+            if from_matlab:
+                start_byte += 60
 
         # parse channels
         if not from_matlab:
