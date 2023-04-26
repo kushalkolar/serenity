@@ -156,20 +156,22 @@ class SerenityServer:
                 # sleep for 5ms and go back to the top of the loop
                 sleep(0.005)
                 continue
-
+                
             self.socket.send(data)
+            print(f"sent frame: {self.current_index_read}")
 
             send_time = time()
-
+            
+            # reply wait loop
             while True:
                 now = time()
                 try:
                     reply = self.socket.recv(zmq.NOBLOCK)
-                    print(reply)
+                    print(f"received reply for: {np.frombuffer(reply, dtype=np.uint32)}")
                 # reply not yet received
                 except zmq.Again:
-                    # if we've waited longer than 10ms for a reply, send again
-                    if now - send_time > 0.01:
+                    # if we've waited longer than 100ms for a reply, send again
+                    if now - send_time > 1:
                         self.current_failed_attempt += 1
                         break
                 # reply received, increment to next frame
@@ -179,9 +181,10 @@ class SerenityServer:
                     # increment to next frame
                     self.current_index_read += 1
                     self.current_failed_attempt = 0
+                    break
 
     def _get_frame_buffer_path(self, index: int):
-        return self.buffer_path.joinpath(f"{index}.bin")
+        return self.buffer_path.joinpath(self.current_uid, f"{index}.bin")
 
     def _remove_from_from_buffer(self, index):
         frame_buffer_path = self._get_frame_buffer_path(index)
