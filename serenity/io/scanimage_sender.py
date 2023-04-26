@@ -96,7 +96,7 @@ class SerenityServer:
 
                 sleep(0.5)
             else:
-                self.socket_matlab.send(uid_reply)
+                self.socket_matlab.send_string(uid_reply)
                 break
 
         # start frame sending loop
