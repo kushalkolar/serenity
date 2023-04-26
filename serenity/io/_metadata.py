@@ -109,6 +109,15 @@ class AcquisitionMetadata:
             channel_instance = Channel(**ch)
             channels.append(channel_instance)
 
+        if "header_elements" in data.keys():
+            _header_elements = data.pop("header_elements")
+            header_elements: List[HeaderElement] = list()
+            for he in _header_elements:
+                header_elements.append(
+                    HeaderElement(**he)
+                )
+            data["header_elements"] = tuple(header_elements)
+
         return cls(channels=tuple(channels), **data)
 
     def to_dict(self) -> dict:
@@ -119,3 +128,7 @@ class AcquisitionMetadata:
         d["uid"] = str(d["uid"])
 
         return json.dumps(d)
+
+    def to_disk(self, path):
+        with open(path, "w") as f:
+            json.dump(self.to_dict(), f)

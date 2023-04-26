@@ -1,0 +1,13 @@
+actors:
+  ScanImageReceiver:
+    package: serenity.actors.datamanager
+    class: ScanImageReceiver
+    address: "tcp://0.0.0.0:9051"
+
+  MesmerizeWriter:
+    package: serenity.actors.datamanager
+    class: MesmerizeWriter
+
+connections:
+  ScanImageReceiver.q_out: [MesmerizeWriter.q_in]
+

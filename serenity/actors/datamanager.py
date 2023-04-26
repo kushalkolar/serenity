@@ -10,7 +10,7 @@ import zmq
 
 from improv.actor import Actor
 
-from ..io import AcquisitionMetadata, TwoPhotonFrame
+from serenity.io import AcquisitionMetadata, TwoPhotonFrame
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -22,8 +22,8 @@ class ScanImageReceiver(Actor):
     """
     def __init__(
             self,
-            address: str = "tcp://0.0.0.0:9050",
             *args,
+            address: str = None,
             **kwargs
     ):
         """
@@ -33,15 +33,22 @@ class ScanImageReceiver(Actor):
             Address that zmq server will listen on for receiving data from scanimage
 
         """
+        if address is None:
+            raise("Must specify address in improv graphic config yaml")
 
+        self.address = address
+
+        # super(ScanImageReceiver, self).__init__(name="ScanImageReceiver")
         super().__init__(*args, **kwargs)
 
+    def setup(self):
         # for receiving acquisition metadata
         self.context_acq = zmq.Context()
         self.socket = self.context_acq.socket(zmq.REP)
+        # self.socket.setsockopt(zmq.REQ, 1)
         self.socket.setsockopt(zmq.BACKLOG, 1_000)
-        self.socket.setsockopt(zmq.LINGER, 1000 * 10)  # 10 seconds
-        self.socket.bind(address)
+        self.socket.setsockopt(zmq.LINGER, 10)  # 10ms
+        self.socket.bind(self.address)
 
         # received frame indices
         self.received_indices: List[int] = list()
@@ -60,7 +67,6 @@ class ScanImageReceiver(Actor):
         self.acq_ready: bool = False
         self.acq_meta = None
 
-    def setup(self):
         logger.info("ScanImageReceiver receiver ready!")
 
     def stop(self):
@@ -79,7 +85,7 @@ class ScanImageReceiver(Actor):
             return b
 
     def _reply_frame_received(self, index: int):
-        self.socket.send(index)
+        self.socket.send(str(index).encode("utf-8"))
 
     def runStep(self):
         """
@@ -101,15 +107,25 @@ class ScanImageReceiver(Actor):
             self.acq_meta = AcquisitionMetadata.from_json(b, uid)
 
             # reply to socket
-            self.socket.send(bytes(str(uid), "utf-8"))
+            self.socket.send_string(str(uid))
 
             self.current_uid = uid
             self.acq_ready = True
+            # self downstream
+            self.q_out.put(self.acq_meta.to_json())
             return
 
         # else, this is a frame, parse and send
-        frame = TwoPhotonFrame.from_bytes(b, self.acq_meta, from_matlab=True)
-        self._reply_frame_received(frame.index)
+        try:
+            frame = TwoPhotonFrame.from_bytes(b, self.acq_meta, from_matlab=True)
+        except Exception as e:
+            # bad frame, request new one
+            self.socket.send("bad frame".encode("utf-8"))
+            logger.error(f"Bad frame after index: {self.current_trial_index}")
+            return
+        else:
+            # goo frame, reply frame index
+            self._reply_frame_received(frame.index)
 
         # this is a new frame
         if frame.index not in self.received_indices:
@@ -119,8 +135,8 @@ class ScanImageReceiver(Actor):
             if self.previous_trigger_states == self._trial_index_increment_match:
                 self.current_trial_index += 1
 
-            frame.trial_index = self.current_trial_index
-
+            # MUST be numpy array, else to_bytes doesn't work!
+            frame.trial_index = np.array([self.current_trial_index], dtype=np.uint32)
             self.q_out.put(frame.to_bytes())
         # in case a frame was received but the reply wasn't received on the other end
         else:
@@ -145,36 +161,28 @@ class MesmerizeWriter(Actor):
         addr_acq_meta: str
             zmq address to receive acquisition metadata
         """
+        # super(MesmerizeWriter, self).__init__(*args, name="MesmerizeWriter", **kwargs)
         super().__init__(*args, **kwargs)
+
         self.acq_meta: AcquisitionMetadata = None
-        self.writers: List[tifffile.TiffWriter] = list()
+        self.writers: List[tifffile.TiffWriter] = None
 
     def setup(self):
-        # TODO: maybe do something here where we get the UUID and other info like params?
-        # TODO: Also decide how we communicate information like dtype, buffer parsing etc.
-        self.acq_meta: AcquisitionMetadata
-
-        for channel in self.acq_meta.channels:
-            color = channel.color
-            self.writers.append(tifffile.TiffWriter(f"./{color}.tiff", bigtiff=True))
-
-        # TODO: Get acquisition params etc. from store
-
-
         logger.info("Mesmerize Writer ready")
 
-    def _get_frame(self) -> TwoPhotonFrame:
+    def _get_frame(self) -> bytes | None:
         """
         Gets frame from ScanImageReceiver
         """
         try:
-            buff = self.q_in.get(timeout=0.05)  # queue connected to ScanImageReceiver
+            b = self.q_in.get(timeout=0.05)  # queue connected to ScanImageReceiver
         except Empty:
-            pass
+            return None
         except:
             logger.error("Could not get frame!")
+            return None
         else:
-            return TwoPhotonFrame.from_bytes(buff, self.acq_meta)
+            return b
 
     def stop(self):
         for w in self.writers:
@@ -190,6 +198,19 @@ class MesmerizeWriter(Actor):
 
         if frame is None:
             return
+
+        # set acq metadata
+        if self.acq_meta is None:
+            self.acq_meta = AcquisitionMetadata.from_json(frame)
+            self.acq_meta.to_disk(f"/data/kushal/improv-testing/{self.acq_meta.uid}.json")
+            self.writers = list()
+            for channel in self.acq_meta.channels:
+                color = channel.color
+                self.writers.append(tifffile.TiffWriter(f"/data/kushal/improv-testing/{color}.tiff", bigtiff=True))
+
+            return
+
+        frame = TwoPhotonFrame.from_bytes(frame, self.acq_meta)
 
         for writer, channel_data in zip(self.writers, frame.channels):
             writer.write(channel_data)
