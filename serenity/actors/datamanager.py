@@ -1,6 +1,8 @@
+from typing import *
 from queue import Empty
 import logging
-from typing import *
+from collections import deque
+from uuid import uuid4
 
 import numpy as np
 import tifffile
@@ -38,32 +40,41 @@ class ScanImageReceiver(Actor):
         self.context_acq = zmq.Context()
         self.socket = self.context_acq.socket(zmq.REP)
         self.socket.setsockopt(zmq.BACKLOG, 1_000)
+        self.socket.setsockopt(zmq.LINGER, 1000 * 10)  # 10 seconds
         self.socket.bind(address)
 
         # received frame indices
         self.received_indices: List[int] = list()
 
+        # increment trial_index whenever we get a [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+        # this is the rising edge of the trigger
+        self.n_frames_trial_index_increment = 5
+        n = self.n_frames_trial_index_increment
+        self.previous_trigger_states = deque([0] * (2 * n), maxlen=10)
+        self._trial_index_increment_match = deque([0] * n + [1] * n)
+
+        self.current_trial_index = 0
+
+        self.current_uid = None
+
+        self.acq_ready: bool = False
+        self.acq_meta = None
+
     def setup(self):
-        logger.info("ScanImageReceiver receiver starting")
-
-        # TODO: Think about how to enter acquisition metadata
-        # TODO: Some comes from scanimage such as fps
-
-        # TODO: put acquisition metadata in store
-
-        self.acquisition_metadata: AcquisitionMetadata = None
-
         logger.info("ScanImageReceiver receiver ready!")
 
-    def _receive_bytes(self) -> List[bytes] | None:
+    def stop(self):
+        self.socket.close()
+
+    def _receive_bytes(self) -> bytes | None:
         """
-        Pulls bytes from the socket
+        receive bytes from the socket
         """
 
         try:
-            b = self.socket.recv_multipart(zmq.NOBLOCK)
+            b = self.socket.recv(zmq.NOBLOCK)
         except zmq.Again:
-            pass
+            return None
         else:
             return b
 
@@ -84,12 +95,34 @@ class ScanImageReceiver(Actor):
         if b is None:
             return
 
-        frame = TwoPhotonFrame.from_zmq_multipart(b, self.acquisition_metadata)
+        # we expect that this is json encoded acq metadata
+        if not self.acq_ready:
+            uid = uuid4()
+            self.acq_meta = AcquisitionMetadata.from_json(b, uid)
+
+            # reply to socket
+            self.socket.send(bytes(str(uid), "utf-8"))
+
+            self.current_uid = uid
+            self.acq_ready = True
+            return
+
+        # else, this is a frame, parse and send
+        frame = TwoPhotonFrame.from_bytes(b, self.acq_meta, from_matlab=True)
         self._reply_frame_received(frame.index)
 
-        # in case a frame was received but the reply wasn't received on the other end
+        # this is a new frame
         if frame.index not in self.received_indices:
+            # determine trial index
+            self.previous_trigger_states.append(frame.trigger_state)
+            # check for rising edge of trigger
+            if self.previous_trigger_states == self._trial_index_increment_match:
+                self.current_trial_index += 1
+
+            frame.trial_index = self.current_trial_index
+
             self.q_out.put(frame.to_bytes())
+        # in case a frame was received but the reply wasn't received on the other end
         else:
             # send reply again
             self._reply_frame_received(frame.index)

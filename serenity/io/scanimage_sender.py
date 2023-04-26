@@ -2,17 +2,53 @@ from typing import *
 from pathlib import Path
 from time import time, sleep
 
+import numpy as np
 import zmq
 
 
-class ScanImageSender:
-    def __init__(self, address: str, buffer_path: Path | str):
+class SerenityServer:
+    def __init__(
+            self,
+            address_improv_server: str,
+            address_matlab: str,
+            buffer_path: Path | str
+    ):
+        # for sending data to improv actor
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REQ)
-        self.socket.connect(address)
+        self.socket.connect(address_improv_server)
 
+        # for receiving acq metadata from matlab
+        self.context_matlab = zmq.Context()
+        self.socket_matlab = self.context_matlab.socket(zmq.REP)
+        self.socket_matlab.bind(address_matlab)
+
+        # frame buffer on SSD
         self.buffer_path = Path(buffer_path)
 
+        self.indices_received = None
+        self.indices_sent = None
+        self.current_index_read = None
+        self.current_failed_attempt = None
+
+        self.acq_ended = None
+        self.last_frame_ix = None
+
+    def close(self):
+        self.socket_matlab.close()
+
+    def start_acq(self, timeout: int = 30):
+        """
+        Receive acquisition metadata from matlab and get ready for acquisition.
+        Blocks until acquisition metadata is received. Starts acquisition loop
+        after metadata is received.
+
+        Parameters
+        ----------
+        timeout: int, default ``30``
+            timeout in seconds
+
+        """
         # frames that have been successfully received
         self.indices_received: List[int] = list()
 
@@ -22,8 +58,91 @@ class ScanImageSender:
         self.current_index_read = 1
         self.current_failed_attempt: int = 0
 
+        t = time()
+        while True:
+            now = time()
+            # check every second for acquisition metadata
+            try:
+                # receive acq metadata from matlab
+                acq_meta_json = self.socket_matlab.recv(zmq.NOBLOCK)
+            except zmq.Again:
+                if (now - t) > timeout:
+                    raise TimeoutError(
+                        "Receiving acquisition metadata has timed out."
+                    )
+                sleep(1)
+            else:
+                break
+
+        # send acquisition metadata to improv, should send uuid in reply
+        self.socket.send(acq_meta_json)
+
+        t = time()
+        # wait for reply
+        while True:
+            now = time()
+            try:
+                # uuid from improv for this acquisition
+                uid_reply = self.socket.recv(zmq.NOBLOCK)
+            except zmq.Again:
+                if now - t > 5:
+                    msg = "Failed to receive reply for acquisition metadata, try `start_acq()` again."
+                    # reply to matlab with uuid
+                    self.socket_matlab.send_string(msg)
+                    raise TimeoutError(msg)
+
+                sleep(0.5)
+            else:
+                self.socket_matlab.send(uid_reply)
+                break
+
+        # start frame sending loop
+        self.acq_ended = False
+        self.last_frame_ix = None
+        self.send_loop()
+
+    def _check_end_acq(self):
+        try:
+            frame_ix = self.socket_matlab.recv(zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        else:
+            self.last_frame_ix = np.frombuffer(frame_ix, offset=60, count=1, dtype=np.uint32).item()
+            print(self.last_frame_ix)
+            self.acq_ended = True
+
+    def end_acq(self):
+        # tell improv to end acq
+        self.socket.send(b"end-acquisition")
+
+        send_time = time()
+        print("waiting for improv to acknowledge end of acquisition")
+        while True:
+            try:
+                msg = self.socket.recv(zmq.NOBLOCK)
+            except zmq.Again:
+                if time() - send_time > 30:
+                    msg = "Timeout exceeded in waiting for improv to acknowledge end of acquisition"
+                    self.socket_matlab.send_string(msg)
+                    raise TimeoutError(msg)
+                sleep(1)
+                break
+            else:
+                print(str(msg))
+                # reply to matlab acq ended
+                self.socket_matlab.send_string("serenity server and improv ended acquisition")
+                break
+
     def send_loop(self):
         while True:
+            # check if scanimage acq has ended
+            self._check_end_acq()
+
+            if self.acq_ended:
+                if self.current_index_read > self.last_frame_ix:
+                    self.end_acq()
+                    break
+
             data = self._read_frame_buffer(self.current_index_read)
 
             # if frame buffer not yet ready for this index
@@ -49,7 +168,9 @@ class ScanImageSender:
                         break
                 # reply received, increment to next frame
                 else:
-                    # send next frame
+                    # remove the replied frame from buffer
+                    self._remove_from_from_buffer(self.current_index_read)
+                    # increment to next frame
                     self.current_index_read += 1
                     self.current_failed_attempt = 0
 
@@ -62,6 +183,10 @@ class ScanImageSender:
 
     def _read_frame_buffer(self, index: int):
         frame_buffer_path = self._get_frame_buffer_path(index)
+        # frame not yet written
+        if not frame_buffer_path.exists():
+            return None
+
         try:
             with open(frame_buffer_path, "rb") as f:
                 data = f.read()
