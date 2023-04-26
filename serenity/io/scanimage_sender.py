@@ -86,7 +86,7 @@ class SerenityServer:
             now = time()
             try:
                 # uuid from improv for this acquisition
-                uid_reply = str(self.socket.recv(zmq.NOBLOCK))
+                uid_reply = self.socket.recv_string(zmq.NOBLOCK, encoding="utf-8")
             except zmq.Again:
                 if now - t > 5:
                     msg = "Failed to receive reply for acquisition metadata, try `start_acq()` again."
