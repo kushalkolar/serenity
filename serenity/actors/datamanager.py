@@ -2,7 +2,11 @@ from typing import *
 from queue import Empty
 import logging
 from collections import deque
-from uuid import uuid4
+from pathlib import Path
+import traceback
+
+import pandas as pd
+from mesmerize_core import load_batch
 
 import numpy as np
 import tifffile
@@ -11,6 +15,7 @@ import zmq
 from improv.actor import Actor
 
 from serenity.io import AcquisitionMetadata, TwoPhotonFrame
+from serenity.extensions import AcquisitionDataFrameExtensions, AcquisitionSeriesExtensions
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -52,6 +57,7 @@ class ScanImageReceiver(Actor):
 
         # received frame indices
         self.received_indices: List[int] = list()
+        self.last_frame_index: int = -1
 
         # increment trial_index whenever we get a [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
         # this is the rising edge of the trigger
@@ -103,17 +109,23 @@ class ScanImageReceiver(Actor):
 
         # we expect that this is json encoded acq metadata
         if not self.acq_ready:
-            uid = uuid4()
-            self.acq_meta = AcquisitionMetadata.from_json(b, uid)
+            try:
+                self.acq_meta = AcquisitionMetadata.from_jsons(b, generate_uuid=True)
 
-            # reply to socket
-            self.socket.send_string(str(uid))
+                # reply to socket
+                # just send the first uid if using two channels, doesn't matter for matlab
+                uids = self.acq_meta.uuids
 
-            self.current_uid = uid
-            self.acq_ready = True
-            # self downstream
-            self.q_out.put(self.acq_meta.to_json())
-            return
+                self.acq_ready = True
+                # self downstream
+                self.q_out.put(self.acq_meta.to_json())
+            except Exception as e:
+                self.socket.send_string(f"Failure in starting acquisition\n{e}\n{traceback.format_exc()}")
+            else:
+                self.socket.send_string("_".join(uids))
+                logger.info(f"********** UUID in receiver ********\n{self.acq_meta.uuids}")
+            finally:
+                return
 
         # else, this is a frame, parse and send
         try:
@@ -121,10 +133,10 @@ class ScanImageReceiver(Actor):
         except Exception as e:
             # bad frame, request new one
             self.socket.send("bad frame".encode("utf-8"))
-            logger.error(f"Bad frame after index: {self.current_trial_index}")
+            logger.error(f"Bad frame after index: {self.last_frame_index}")
             return
         else:
-            # goo frame, reply frame index
+            # good frame, reply frame index
             self._reply_frame_received(frame.index)
 
         # this is a new frame
@@ -138,6 +150,7 @@ class ScanImageReceiver(Actor):
             # MUST be numpy array, else to_bytes doesn't work!
             frame.trial_index = np.array([self.current_trial_index], dtype=np.uint32)
             self.q_out.put(frame.to_bytes())
+            self.last_frame_index = frame.index
         # in case a frame was received but the reply wasn't received on the other end
         else:
             # send reply again
@@ -164,13 +177,18 @@ class MesmerizeWriter(Actor):
         # super(MesmerizeWriter, self).__init__(*args, name="MesmerizeWriter", **kwargs)
         super().__init__(*args, **kwargs)
 
+        # mesmerize batch dir for this acquisition
         self.acq_meta: AcquisitionMetadata = None
         self.writers: List[tifffile.TiffWriter] = None
+        self.movie_paths: List[Path] = None
+        self.header_paths: List[Path] = None
+
+        self.dataframe: pd.DataFrame = None
 
     def setup(self):
         logger.info("Mesmerize Writer ready")
 
-    def _get_frame(self) -> bytes | None:
+    def _get_bytes(self) -> bytes | None:
         """
         Gets frame from ScanImageReceiver
         """
@@ -184,33 +202,55 @@ class MesmerizeWriter(Actor):
         else:
             return b
 
+    def _reset(self):
+        """
+        Reset the state of this actor to get ready for next acquisition
+        """
+        self.acq_meta: AcquisitionMetadata = None
+        self.writers: List[tifffile.TiffWriter] = None
+        self.movie_paths: List[Path] = None
+        self.header_paths: List[Path] = None
+
     def stop(self):
         for w in self.writers:
             w.close()
 
         return 0
 
+    def _setup_new_acq(self, bytes_acq_meta):
+        self.acq_meta = AcquisitionMetadata.from_jsons(bytes_acq_meta)
+
+        logger.info(f"********** UUID in mesmerize writer ********\n{self.acq_meta.uuids}")
+
+        # load mesmerize dataframe
+        self.dataframe = load_batch(self.acq_meta.database, file_format="parquet")
+
+        self.movie_paths, self.header_paths = self.dataframe.acq.add_item(acq_meta=self.acq_meta)
+
+        self.writers = list()
+        for i in range(len(self.acq_meta.channels)):
+            self.writers.append(tifffile.TiffWriter(self.movie_paths[i], bigtiff=True))
+
     def runStep(self):
         """
         Writes data to a mesmerize database
         """
-        frame = self._get_frame()
+        b = self._get_bytes()
 
-        if frame is None:
+        if b is None:
             return
 
+        # TODO: write header data to disk as well
         # set acq metadata
         if self.acq_meta is None:
-            self.acq_meta = AcquisitionMetadata.from_json(frame)
-            self.acq_meta.to_disk(f"/data/kushal/improv-testing/{self.acq_meta.uid}.json")
-            self.writers = list()
-            for channel in self.acq_meta.channels:
-                color = channel.color
-                self.writers.append(tifffile.TiffWriter(f"/data/kushal/improv-testing/{color}.tiff", bigtiff=True))
+            self._setup_new_acq(b)
 
             return
 
-        frame = TwoPhotonFrame.from_bytes(frame, self.acq_meta)
+        frame = TwoPhotonFrame.from_bytes(b, self.acq_meta)
 
-        for writer, channel_data in zip(self.writers, frame.channels):
+        for i, (writer, channel_data) in enumerate(zip(self.writers, frame.channels)):
             writer.write(channel_data)
+
+            # append header of current frame to header file
+            frame.append_header_file(self.header_paths[i], channel=i)
