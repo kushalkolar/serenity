@@ -166,6 +166,7 @@ class MesmerizeWriter(Actor):
 
         self.acq_meta: AcquisitionMetadata = None
         self.writers: List[tifffile.TiffWriter] = None
+        self.acquisition_nframes: int = None
 
     def setup(self):
         logger.info("Mesmerize Writer ready")
@@ -184,6 +185,14 @@ class MesmerizeWriter(Actor):
         else:
             return b
 
+    def _reset(self):
+        """
+        Reset the state of this actor to get ready for next acquisition
+        """
+        self.acq_meta = None
+        self.writers = None
+        self.acquisition_nframes = None
+
     def stop(self):
         for w in self.writers:
             w.close()
@@ -199,10 +208,15 @@ class MesmerizeWriter(Actor):
         if frame is None:
             return
 
+        # TODO: write header data to disk as well
         # set acq metadata
         if self.acq_meta is None:
             self.acq_meta = AcquisitionMetadata.from_json(frame)
             self.acq_meta.to_disk(f"/data/kushal/improv-testing/{self.acq_meta.uid}.json")
+
+            # make file to store frame headers
+            self.acq_meta.create_header_file(f"/data/kushal/improv-testing/{self.acq_meta.uid}.header")
+
             self.writers = list()
             for channel in self.acq_meta.channels:
                 color = channel.color
@@ -214,3 +228,6 @@ class MesmerizeWriter(Actor):
 
         for writer, channel_data in zip(self.writers, frame.channels):
             writer.write(channel_data)
+
+        # append header of current frame to header file
+        frame.append_header_file(f"/data/kushal/improv-testing/{self.acq_meta.uid}.header")

@@ -1,5 +1,8 @@
 from dataclasses import dataclass
 from typing import *
+from pathlib import Path
+
+import h5py
 import numpy as np
 
 from ._metadata import AcquisitionMetadata
@@ -173,6 +176,25 @@ class TwoPhotonFrame:
             b.extend(channel)
 
         return b
+
+    def append_header_file(self, path: Path | str):
+        """
+        Append header information from this frame to the header file at the given path
+        """
+        path = Path(path)
+        if not path.exists():
+            raise FileExistsError(f"header does not exist at given location: {path}")
+
+        with h5py.File(path, "r+") as f:
+            if not f.attrs["uid"] == str(self.acq_meta.uid):
+                raise ValueError(
+                    "acquisition uid of the given header file does not "
+                    "match the acquisition uid of the current frame"
+                )
+            for header_element in self.acq_meta.header_elements:
+                val = getattr(self, header_element.name)
+                # since it will be an array of size 1
+                f[header_element.name][self.index] = val.item()
 
     def __eq__(self, other):
         """

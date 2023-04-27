@@ -1,9 +1,11 @@
 from uuid import UUID
 from dataclasses import dataclass, asdict
 import json
+from pathlib import Path
 from typing import *
 
 import numpy as np
+import h5py
 
 
 @dataclass
@@ -91,6 +93,11 @@ class AcquisitionMetadata:
     def nbytes_header(self) -> int:
         return sum(e.nbytes for e in self.header_elements)
 
+    @property
+    def n_frames(self) -> int:
+        """number of frames set for this acquisition + 100"""
+        return self.scanimage_meta["hStackManager"]["framesPerSlice"] + 100
+
     @classmethod
     def from_json(cls, json_str: bytes, uid: UUID = None):
         data = json.loads(json_str)
@@ -120,6 +127,25 @@ class AcquisitionMetadata:
 
         return cls(channels=tuple(channels), **data)
 
+    def create_header_file(self, path: Path | str):
+        """
+        Create header file at given path, used to store frame headers for every frame
+        """
+        path = Path(path)
+        if path.exists():
+            raise FileExistsError(f"header file already exists at given location: {path}")
+
+        n_frames = self.n_frames
+
+        with h5py.File(path, "w") as f:
+            # store uid
+            f.attrs["uid"] = str(self.uid)
+
+            # create dataset for each header element which will be stored as 1D array
+            for header_element in self.header_elements:
+                f.create_dataset(header_element.name, shape=(n_frames,), dtype=header_element.dtype)
+
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -131,4 +157,4 @@ class AcquisitionMetadata:
 
     def to_disk(self, path):
         with open(path, "w") as f:
-            json.dump(self.to_dict(), f)
+            json.dump(self.to_dict(), f, indent=2)
