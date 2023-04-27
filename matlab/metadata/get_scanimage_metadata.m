@@ -23,7 +23,8 @@ function meta = get_scanimage_metadata(hsi)
         "hShutters",
         "hDisplay",
         "hUserFunctions",
-        "hScan2D"
+        "hScan2D",
+        "hStackManager"  % this contains info such as how many frames the user has set to capture
     };
 
     % each meta data field
@@ -51,6 +52,10 @@ function meta = get_scanimage_metadata(hsi)
     % remove some non-serializable objects
     meta.hBeams = rmfield(meta.hBeams, "pzFunction ");
     meta.hBeams = rmfield(meta.hBeams, "hBeams");
+
+    % remove last frame data since this is not necessary
+    meta.hDisplay = rmfield(meta.hDisplay, "lastFrame");
+    meta.hDisplay = rmfield(meta.hDisplay, "lastAveragedFrame");
     
     % remove shutter data for now 
     % contains lots of non-serializable hardware objcs

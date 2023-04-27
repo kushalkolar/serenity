@@ -181,7 +181,7 @@ class SerenityServer:
                 # reply not yet received
                 except zmq.Again:
                     # if we've waited longer than 20ms for a reply, send again
-                    if now - send_time > 0.02:
+                    if now - send_time > 0.03:
                         self.current_failed_attempt += 1
                         break
                 # reply received, increment to next frame
