@@ -3,7 +3,10 @@ acq_meta = get_automated_acq_meta(hSI);
 
 % Set these manually per-acquisition
 % set acquisition data
-acq_meta.database = "/data/kushal/layer1-mesmerize";
+
+%%
+% *BOLD TEXT* 
+acq_meta.database = "/data/kushal/layer1-db/batch.parquet";
 acq_meta.animal_id = "mouse_1";
 
 % set green channel data
