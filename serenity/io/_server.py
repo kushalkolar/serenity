@@ -4,7 +4,7 @@ from time import time, sleep
 
 import numpy as np
 import zmq
-from IPython.display import display, clear_output
+from IPython.display import clear_output
 
 
 class SerenityServer:

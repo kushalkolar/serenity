@@ -20,6 +20,13 @@ class AcquisitionSeriesExtensions:
     def __init__(self, series: pd.Series):
         self._series = series
 
+    def get_item_dir(self) -> Path:
+        return self._series.paths.get_batch_path().parent.joinpath(self.uuid)
+
+    @property
+    def uuid(self) -> str:
+        return self._series["uuid"]
+
     # TODO: make mesmerize cache decorator more easily accessible so I can use it here
     def get_meta(self) -> AcquisitionMetadata:
         """
@@ -31,13 +38,11 @@ class AcquisitionSeriesExtensions:
             acquisition metadata object
         """
         # "batch_path/uuid/uuid.json"
-        u = self._series["uuid"]
-        path = self._series.paths.get_batch_path().joinpath(u, f"{u}.json")
+        path = self.get_item_dir().joinpath(f"{self.uuid}.json")
         return AcquisitionMetadata.from_json(path)
 
     def get_header(self) -> Dict[str, np.ndarray]:
-        u = self._series["uuid"]
-        path = self._series.paths.get_batch_path().joinpath(u, f"{u}.header")
+        path = self.get_item_dir().joinpath(f"{self.uuid}.header")
 
         with h5py.File(path, "r") as f:
             header = dict.fromkeys(f.keys())
