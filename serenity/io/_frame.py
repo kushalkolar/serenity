@@ -177,7 +177,7 @@ class TwoPhotonFrame:
 
         return b
 
-    def append_header_file(self, path: Path | str):
+    def append_header_file(self, path: Path | str, channel: int):
         """
         Append header information from this frame to the header file at the given path
         """
@@ -186,7 +186,7 @@ class TwoPhotonFrame:
             raise FileExistsError(f"header does not exist at given location: {path}")
 
         with h5py.File(path, "r+") as f:
-            if not f.attrs["uid"] == str(self.acq_meta.uid):
+            if not f.attrs["uuid"] == str(self.acq_meta.uuids[channel]):
                 raise ValueError(
                     "acquisition uid of the given header file does not "
                     "match the acquisition uid of the current frame"
