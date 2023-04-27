@@ -22,10 +22,10 @@ classdef SerenityClient < handle
         socket
         acq_metadata
         acq_ready
-        ZMsg
+        uid
         parent_buffer_path
         current_buffer_path
-        bg_pool
+        ZMQ_NOBLOCK
     end
 
     properties(SetAccess=protected, GetAccess=public)
@@ -44,16 +44,18 @@ classdef SerenityClient < handle
             % import zeromq
             import org.zeromq.*;
 
+            obj.ZMQ_NOBLOCK = ZMQ.NOBLOCK;
+
             % connect to server, client is in PUSH configuration
             obj.context = ZContext();
-            obj.socket = obj.context.createSocket(SocketType.PUSH);
+            obj.socket = obj.context.createSocket(SocketType.REQ);
             obj.socket.connect(address);
-            obj.acq_ready = false;
 
-            obj.ZMsg = ZMsg;
+            obj.acq_ready = false;
+            obj.uid = "";
+
             disp("Successfully connected!")
             obj.address = address;
-            disp(obj.address)
 
             obj.parent_buffer_path = parent_buffer_path;
             obj.current_buffer_path = "";
@@ -61,82 +63,83 @@ classdef SerenityClient < handle
 
         function prep_acq(obj, metadata)
             % prepare acquisition
-            obj.socket.send("acquisition-prep-incoming");
+            % get acq metadata
             acq_meta = jsonencode(metadata);
+
+            % send to serenity server
             obj.socket.send(acq_meta);
-            obj.socket.send("acquisition-prep-sent");
-            % TODO: Would be nice to receive validation response from server
-            obj.acq_ready = true;
-            disp("Acquisition data sent, check if received on server")
-            obj.acq_metadata = metadata;
-            obj.current_buffer_path = fullfile(obj.parent_buffer_path, "test");
-            mkdir(obj.current_buffer_path)
-        end
+            tic;
+            % wait for server to acknowledge
+            while true
+                reply = obj.socket.recv(obj.ZMQ_NOBLOCK);
+                if toc > 10
+                    error("Timeout exceeded for confirming acquisition start")
+                end
+                % reply not yet received, try again
+                if isempty(reply)
+                    % wait for 0.5s
+                    pause(0.5)
+                    continue
+                end
+                % get string representation from bytes
+                response = convertCharsToStrings(native2unicode(reply));
+                % if there was a failure
+                if startsWith(response, "Failed")
+                    error(response)
+                else
+                    % uuid of this acquisition
+                    obj.uid = response;
+                    % ready for acquisition
+                    obj.acq_ready = true;
+                    % acq metadata
+                    obj.acq_metadata = metadata;
+                    % make path for frame buffer
+                    obj.current_buffer_path = fullfile(obj.parent_buffer_path, obj.uid);
+                    mkdir(obj.current_buffer_path)
 
-        function send_frame(obj, src)
-            % sends frame to zmq socket
-            % src: scanimage hSI object
-
-%             if obj.acq_ready ~= true
-%                 ex = MException("Acquisition is not preped. Call pre_acq() first.");
-%                 throw(ex)
-%             end
-            % get data from scanimage
-            last_stripe = src.hSI.hDisplay.stripeDataBuffer{src.hSI.hDisplay.stripeDataBufferPointer};
-
-            msg = obj.ZMsg();
-            % frame index
-            msg.add(getByteStreamFromArray(uint32(last_stripe.frameNumberAcq)));
-            % trial index
-            msg.add(getByteStreamFromArray(uint32(0)));
-            % trigger state
-            msg.add(getByteStreamFromArray(uint32(0)));
-            % timestamp
-            msg.add(getByteStreamFromArray(single(last_stripe.frameTimestamp)));
-
-            % frame data
-            for channel_ix = 1:length(last_stripe.roiData{1}.channels)
-                msg.add(getByteStreamFromArray(last_stripe.roiData{1}.imageData{channel_ix}{1}(:)));
+                    disp("Acquisition prepped successfully with uid:")
+                    disp(obj.uid)
+                    break
+                end
             end
-
-            % send
-            msg.send(obj.socket);
         end
         
         function new_frame_ready(obj, src)
             last_stripe = src.hSI.hDisplay.stripeDataBuffer{src.hSI.hDisplay.stripeDataBufferPointer};
-            parfeval(backgroundPool, @obj.write_buffer, 0, last_stripe)
+            %parfeval(obj.pool, @write_buffer, 0, obj.current_buffer_path, last_stripe);
+            write_buffer(obj.current_buffer_path, last_stripe)
         end
 
-        function write_buffer(obj, last_stripe)
-            % write frame to buffer on disk
-            % frame index
-            frame_index = getByteStreamFromArray(uint32(last_stripe.frameNumberAcq));
-            
-            fname = strcat(num2str(last_stripe.frameNumberAcq), ".bin");
-            fid = fopen(fullfile(obj.current_buffer_path, fname), "w");
-
-            fwrite(fid, frame_index)
-
-            % trial index
-            fwrite(fid, getByteStreamFromArray(uint32(0)));
-            % trigger state
-            fwrite(fid, getByteStreamFromArray(uint32(0)));
-            % timestamp
-            fwrite(fid, getByteStreamFromArray(single(last_stripe.frameTimestamp)));
-
-            % frame data
-            for channel_ix = 1:length(last_stripe.roiData{1}.channels)
-                fwrite(fid, getByteStreamFromArray(last_stripe.roiData{1}.imageData{channel_ix}{1}(:)));
-            end
-
-            fclose(fid);
-        end
-
-        function end_acq(obj)
+        function end_acq(obj, src)
             obj.acq_ready = false;
-            obj.socket.send("acquisition-end")
-            disp("Acquisition ended")
+            obj.uid = "";
+
+            last_stripe = src.hSI.hDisplay.stripeDataBuffer{src.hSI.hDisplay.stripeDataBufferPointer};
+            frame_index = getByteStreamFromArray(uint32(last_stripe.frameNumberAcq));
+
+            % get index of last frame
+            obj.socket.send(frame_index)
+
+            % wait for serenity server to end acq
+            tic;
+            % wait for server to acknowledge
+            while true
+                reply = obj.socket.recv(obj.ZMQ_NOBLOCK);
+                if toc > 30
+                    error("Timeout exceeded for confirming acquisition end")
+                    break
+                end
+                if isempty(reply)
+                    pause(0.5)
+                    continue
+                end
+                response = convertCharsToStrings(native2unicode(reply));
+                disp(response)
+                % reset
+                obj.acq_ready = false;
+                obj.uid = "";
+                obj.acq_metadata = "";
+            end
         end
 
         function speed_test(obj, src, n_frames)

@@ -4,6 +4,7 @@ from time import time, sleep
 
 import numpy as np
 import zmq
+from IPython.display import display, clear_output
 
 
 class SerenityServer:
@@ -16,6 +17,7 @@ class SerenityServer:
         # for sending data to improv actor
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REQ)
+        self.socket.setsockopt(zmq.REQ_RELAXED, 1)
         self.socket.connect(address_improv_server)
 
         # for receiving acq metadata from matlab
@@ -31,6 +33,8 @@ class SerenityServer:
         self.indices_sent = None
         self.current_index_read = None
         self.current_failed_attempt = None
+        self.retries: int = 0
+        self.lingering_files = list()
 
         self.current_uid = None
 
@@ -141,6 +145,14 @@ class SerenityServer:
 
     def send_loop(self):
         while True:
+            if self.current_index_read % 50 == 0:
+                clear_output()
+                print(
+                    f"frame sent: {self.current_index_read}\n"
+                    f"retries: {self.retries}\n"
+                    f"frame received: {self.current_index_read - 1}"
+                )
+            
             # check if scanimage acq has ended
             self._check_end_acq()
 
@@ -153,12 +165,11 @@ class SerenityServer:
 
             # if frame buffer not yet ready for this index
             if data is None:
-                # sleep for 5ms and go back to the top of the loop
-                sleep(0.005)
+                # sleep for 2ms and go back to the top of the loop
+                sleep(0.002)
                 continue
                 
             self.socket.send(data)
-            print(f"sent frame: {self.current_index_read}")
 
             send_time = time()
             
@@ -167,17 +178,24 @@ class SerenityServer:
                 now = time()
                 try:
                     reply = self.socket.recv(zmq.NOBLOCK)
-                    print(f"received reply for: {np.frombuffer(reply, dtype=np.uint32)}")
                 # reply not yet received
                 except zmq.Again:
-                    # if we've waited longer than 100ms for a reply, send again
-                    if now - send_time > 1:
+                    # if we've waited longer than 20ms for a reply, send again
+                    if now - send_time > 0.02:
                         self.current_failed_attempt += 1
                         break
                 # reply received, increment to next frame
                 else:
+                    # bad frame
+                    if reply.decode("utf-8") == "bad frame":
+                        self.current_failed_attempt +=1
+                        self.retries += 1
+                        break
                     # remove the replied frame from buffer
-                    self._remove_from_from_buffer(self.current_index_read)
+                    try:
+                        self._remove_from_from_buffer(self.current_index_read)
+                    except:
+                        self.lingering_files.append(self.current_index_read)
                     # increment to next frame
                     self.current_index_read += 1
                     self.current_failed_attempt = 0
