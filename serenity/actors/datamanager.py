@@ -15,6 +15,7 @@ import zmq
 from improv.actor import Actor
 
 from serenity.io import AcquisitionMetadata, TwoPhotonFrame
+from serenity.io.signals import *
 from serenity.extensions import AcquisitionDataFrameExtensions, AcquisitionSeriesExtensions
 
 logger = logging.getLogger(__name__)
@@ -52,9 +53,15 @@ class ScanImageReceiver(Actor):
         self.socket = self.context_acq.socket(zmq.REP)
         # self.socket.setsockopt(zmq.REQ, 1)
         self.socket.setsockopt(zmq.BACKLOG, 1_000)
-        self.socket.setsockopt(zmq.LINGER, 10)  # 10ms
+        self.socket.setsockopt(zmq.LINGER, 0)  # 10ms
         self.socket.bind(self.address)
 
+        self._reset(reset_socket=False)
+
+        logger.info("ScanImageReceiver receiver ready!")
+
+    def _reset(self, reset_socket: bool) :
+        """get read for next acquisition"""
         # received frame indices
         self.received_indices: List[int] = list()
         self.last_frame_index: int = -1
@@ -73,7 +80,17 @@ class ScanImageReceiver(Actor):
         self.acq_ready: bool = False
         self.acq_meta = None
 
-        logger.info("ScanImageReceiver receiver ready!")
+        self._set_state_init()
+
+        if reset_socket:
+            self.socket.unbind(self.address)
+            self.socket.bind(self.address)
+
+    def _set_state_record(self):
+        self.current_state = "record"
+
+    def _set_state_init(self):
+        self.current_state = "init"
 
     def stop(self):
         self.socket.close()
@@ -107,6 +124,19 @@ class ScanImageReceiver(Actor):
         if b is None:
             return
 
+        # this acq has finished, get ready for next acq
+        if b == ACQ_END_SIGNAL:
+            self.q_out.put(b)
+            self.socket.send(b"endreceived")
+            self._reset(reset_socket=True)
+            return
+
+        if b == b"initacquired":
+            self.socket.send(b"initrunnning")
+            self._set_state_record()
+            self.q_out.put(b"record")
+            return
+
         # we expect that this is json encoded acq metadata
         if not self.acq_ready:
             try:
@@ -127,13 +157,13 @@ class ScanImageReceiver(Actor):
             finally:
                 return
 
-        # else, this is a frame, parse and send
+        # else, this is a frame, parse and send to record or init
         try:
             frame = TwoPhotonFrame.from_bytes(b, self.acq_meta, from_matlab=True)
         except Exception as e:
             # bad frame, request new one
             self.socket.send("bad frame".encode("utf-8"))
-            logger.error(f"Bad frame after index: {self.last_frame_index}")
+            logger.error(f"Bad frame after index: {self.last_frame_index}\n{e}\n{traceback.format_exc()}")
             return
         else:
             # good frame, reply frame index
@@ -149,7 +179,9 @@ class ScanImageReceiver(Actor):
 
             # MUST be numpy array, else to_bytes doesn't work!
             frame.trial_index = np.array([self.current_trial_index], dtype=np.uint32)
+
             self.q_out.put(frame.to_bytes())
+
             self.last_frame_index = frame.index
         # in case a frame was received but the reply wasn't received on the other end
         else:
@@ -177,13 +209,7 @@ class MesmerizeWriter(Actor):
         # super(MesmerizeWriter, self).__init__(*args, name="MesmerizeWriter", **kwargs)
         super().__init__(*args, **kwargs)
 
-        # mesmerize batch dir for this acquisition
-        self.acq_meta: AcquisitionMetadata = None
-        self.writers: List[tifffile.TiffWriter] = None
-        self.movie_paths: List[Path] = None
-        self.header_paths: List[Path] = None
-
-        self.dataframe: pd.DataFrame = None
+        self._reset()
 
     def setup(self):
         logger.info("Mesmerize Writer ready")
@@ -207,15 +233,18 @@ class MesmerizeWriter(Actor):
         Reset the state of this actor to get ready for next acquisition
         """
         self.acq_meta: AcquisitionMetadata = None
-        self.writers: List[tifffile.TiffWriter] = None
+        self.writers: List[tifffile.TiffWriter] = list()
+        self.init_writers: List[tifffile.TiffWriter] = list()
         self.movie_paths: List[Path] = None
         self.header_paths: List[Path] = None
+
+        self.dataframe: pd.DataFrame = None
+
+        self.state = "init"
 
     def stop(self):
         for w in self.writers:
             w.close()
-
-        return 0
 
     def _setup_new_acq(self, bytes_acq_meta):
         self.acq_meta = AcquisitionMetadata.from_jsons(bytes_acq_meta)
@@ -227,9 +256,12 @@ class MesmerizeWriter(Actor):
 
         self.movie_paths, self.header_paths = self.dataframe.acq.add_item(acq_meta=self.acq_meta)
 
-        self.writers = list()
         for i in range(len(self.acq_meta.channels)):
             self.writers.append(tifffile.TiffWriter(self.movie_paths[i], bigtiff=True))
+
+            # path for init movies
+            init_path = self.acq_meta.get_init_path(channel_index=i)
+            self.init_writers.append(tifffile.TiffWriter(init_path, bigtiff=True))
 
     def runStep(self):
         """
@@ -238,6 +270,16 @@ class MesmerizeWriter(Actor):
         b = self._get_bytes()
 
         if b is None:
+            return
+
+        if b == ACQ_END_SIGNAL:
+            self._reset()
+            return
+
+        if b == b"record":
+            self.state = "record"
+            logger.info(f"********** MESMERIZE WRITER STATE record ***********")
+            # self.q_out.put(self.acq_meta.to_json())
             return
 
         # TODO: write header data to disk as well
@@ -251,6 +293,18 @@ class MesmerizeWriter(Actor):
 
         for i, (writer, channel_data) in enumerate(zip(self.writers, frame.channels)):
             writer.write(channel_data)
-
             # append header of current frame to header file
             frame.append_header_file(self.header_paths[i], channel=i)
+
+            if self.state == "init":
+                # write frames to init file too
+                for i, (init_writer, channel_data) in enumerate(zip(self.init_writers, frame.channels)):
+                    init_writer.write(channel_data)
+
+        if self.state == "record":
+            # close the init array files
+            for w in self.init_writers:
+                w.close()
+
+            # send to onacid
+            # self.q_out.put(frame.to_bytes())

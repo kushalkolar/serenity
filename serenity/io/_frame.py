@@ -24,6 +24,12 @@ class TwoPhotonFrame:
     index:
         frame index
 
+    sub_index: int
+        frame index within a sub-session
+
+    sub_session: int
+        corresponds to the table-round subsession index
+
     trial_index: np.uint32
         trial index
 
@@ -36,6 +42,8 @@ class TwoPhotonFrame:
     acq_meta: AcquisitionMetadata
     channels: List[np.ndarray]
     index: np.uint32
+    sub_index: np.uint32
+    sub_session: np.uint32
     trial_index: np.uint32
     trigger_state: np.uint32
     timestamp: np.float32

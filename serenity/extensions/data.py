@@ -96,14 +96,18 @@ class AcquisitionDataFrameExtensions:
             # path relative to batch_dir
             relative_input_movie_path = self._dataframe.paths.split(input_movie_path)[1]
 
+            item_name = f"{acq_meta.animal_id}_{acq_meta.date}"
+
             s = pd.Series(
                 {
                     "uuid": uid,
+                    "item_name": item_name,
                     "input_movie_path": str(relative_input_movie_path),
                     "algo": "onacid",
                     "animal_id": acq_meta.animal_id,
                     "framerate": acq_meta.framerate,
                     "date": acq_meta.date,
+                    "sub_session": acq_meta.sub_session,
                     "comments": acq_meta.comments,
                     "channel_index": channel.index,
                     "channel_name": channel.name,

@@ -13,15 +13,18 @@ from caiman.utils.nn_models import (fit_NL_model, create_LN_model, quantile_loss
 
 from improv.actor import Actor
 
-from .metadata import AcquisitionMetadata, TwoPhotonFrame
+from serenity.io import AcquisitionMetadata, TwoPhotonFrame
+from serenity.io.signals import *
+from serenity.extensions import AcquisitionDataFrameExtensions, AcquisitionSeriesExtensions
+import tifffile
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-fr = 15                                                             # frame rate (Hz)
+fr = 30.04                                                             # frame rate (Hz)
 decay_time = 0.5                                                    # approximate length of transient event in seconds
-gSig = (4,4)                                                        # expected half size of neurons
+gSig = (2, 2)                                                        # expected half size of neurons
 p = 1                                                               # order of AR indicator dynamics
 min_SNR = 1                                                         # minimum SNR for accepting new components
 rval_thr = 0.90                                                     # correlation threshold for new component inclusion
@@ -67,10 +70,13 @@ class OnACIDActor(Actor):
     """
     Receives frame from zmq and puts it in the queue
     """
-    def __init__(self, addr_mcorr_frames: str, *args, **kwargs):
+    def __init__(self, *args, channel_index: int, addr_mcorr_frames: str, **kwargs):
         """
         Parameters
         ----------
+        channel_index: int
+            channel to process in this OnACID actor
+
         addr_mcorr_frames: str
             address to publish mcorr frames
         args
@@ -78,6 +84,8 @@ class OnACIDActor(Actor):
         """
         super().__init__(*args, **kwargs)
         self.addr = addr_mcorr_frames
+        self.channel_index: int = channel_index
+        self.init_movie = None
 
     def setup(self):
         # setup ZMQ publisher
@@ -102,61 +110,78 @@ class OnACIDActor(Actor):
 
         self.init_movie = np.zeros((self.init_batch, *self.shape), dtype=self.dtype, order="C")
 
+        self.acq_meta: AcquisitionMetadata = None
+
         logger.info("OnACID ready")
 
-    def _get_frame(self) -> TwoPhotonFrame:
+    def _reset(self):
+        self.acq_meta: AcquisitionMetadata = None
+
+    def _get_bytes(self) -> bytes | None:
         try:
             # TODO: this frame will just be raw bytes which contain a header of specific length
             # TODO: strip and parse header from each received frame
-            buffer = self.q_in.get(timeout=0.05)
+            buffer = self.q_in.get(timeout=0.005)
         except Empty:
-            pass
+            return None
         except:
             logger.error("Could not get frame!")
-
-    def _initialize_onacid(self, frame):
-        if self.frame_index == self.init_batch:
-            m = cm.movie(self.init_movie)
-
-            fname_init = m.save("./init.mmap", order="C")
-
-            self.cnmf_params = cnmf.params.CNMFParams(params_dict)
-            self.cnmf_obj = cnmf.online_cnmf.OnACID(params=self.cnmf_params)
-
-            self.cnmf_obj.initialize_online()
-
-            # onacid init complete
-            self.onacid_initialized = True
-            logger.info("OnACID Intialization Complete!")
-
         else:
-            self.init_movie[self.frame_index] = frame
+            return buffer
+
+    def _initialize_onacid(self, array):
+        self.init_movie = cm.movie(array)
+        memmap_path = self.acq_meta.get_batch_item_path(self.channel_index).joinpath("init.mmap")
+        fname_init = self.init_movie.save(str(memmap_path), order="C")
+
+        params_dict["fnames"] = fname_init
+        params_dict["init_batch"] = array.shape[0]
+
+        self.cnmf_params = cnmf.params.CNMFParams(params_dict)
+        self.cnmf_obj = cnmf.online_cnmf.OnACID(params=self.cnmf_params)
+
+        self.cnmf_obj.initialize_online()
+
+        # to be ready for next frame t arg thing
+        self.frame_index = array.shape[0] + 1
+
+        # onacid init complete
+        self.onacid_initialized = True
+        logger.info("OnACID Intialization Complete!")
 
     def runStep(self):
         """Receives data from queue, performs OnACID"""
 
-        frame2p = self._get_frame()
+        # get bytes from queue
+        b = self._get_bytes()
+
+        # no frames ready
+        if b is None:
+            return
+
+        # bytes available but this is the first queued item, start initialization
+        if self.acq_meta is None:
+            self.acq_meta = AcquisitionMetadata.from_jsons(b)
+
+            # read init array
+            array = tifffile.imread(self.acq_meta.get_init_path(self.channel_index))
+            self._initialize_onacid(array)
+            return
+
+        frame2p = TwoPhotonFrame.from_bytes(b, self.acq_meta)
 
         # TODO: figure out how to deal with dual channels
-        frame = frame2p.channels[0]
+        frame = frame2p.channels[self.channel_index]
 
-        # add frame to initialization
-        if not self.onacid_initialized:
-            self._initialize_onacid(frame)
+        mcorr = self.cnmf_obj.mc_next(self.frame_index, frame)
 
-        # run onacid on frame
-        else:
-            # TODO: need to make sure that the first argument to mc_next() and fit_nex() are correct
-            # TODO: it should be either frame_index or frame_index + 1, or frame_index - 1
-            mcorr = self.cnmf_obj.mc_next(self.frame_index, frame)
+        # TODO: We probably also want to send more information to the viz frontend
+        # TODO: such as frame index and other metadata that we already have
+        # TODO: maybe we just constructe a TwoPhotonFrame object and send the bytes?
+        # send mcorr frame for visualization
+        # self.socket.send(mcorr)
 
-            # TODO: We probably also want to send more information to the viz frontend
-            # TODO: such as frame index and other metadata that we already have
-            # TODO: maybe we just constructe a TwoPhotonFrame object and send the bytes?
-            # send mcorr frame for visualization
-            self.socket.send(mcorr)
-
-            self.cnmf_obj.fit_next(self.frame_index, mcorr.ravel(order="F"))
-            # TODO: keep esitmates in store or on disk or something and poll that for visualization udpates too
+        self.cnmf_obj.fit_next(self.frame_index, mcorr.ravel(order="F"))
+        # TODO: keep esitmates in store or on disk or something and poll that for visualization udpates too
 
         self.frame_index += 1

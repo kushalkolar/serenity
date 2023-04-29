@@ -6,6 +6,7 @@ ADD_COLUMNS = [
     "animal_id",
     "framerate",
     "date",
+    "sub_session",
     "channel_index",
     "channel_name",
     "channel_colors",

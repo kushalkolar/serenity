@@ -47,7 +47,7 @@ class AcquisitionMetadata:
     Parameters
     ----------
     database: str
-        name of mongodb or "batch path" that this acquisition belongs to
+        batch parquet file that this acquisition belongs to
 
     uuid: UUID
         identifier for this acquisition session, must be generated in ScanImageReceiver
@@ -64,6 +64,9 @@ class AcquisitionMetadata:
     date: str
         "YYYYMMDD_HHMMSS", hours in 24 hour format
 
+    sub_session: int
+        subsession number for this acquisition
+
     # TODO: See which scanimage metadata is compatible, make sure no issues
     scanimage_meta: dict
         All other scanimage metadata
@@ -77,6 +80,7 @@ class AcquisitionMetadata:
     channels: Tuple[Channel]
     framerate: float
     date: str
+    sub_session: int
     scanimage_meta: dict = None
     comments: str = None
 
@@ -84,6 +88,8 @@ class AcquisitionMetadata:
     # these are in order
     header_elements: Tuple[HeaderElement] = (
         HeaderElement("index", "uint32"),
+        HeaderElement("sub_index", "uint32"),
+        HeaderElement("sub_session", "uint32"),  # corresponds to one table-round sub-session
         HeaderElement("trial_index", "uint32"),
         HeaderElement("trigger_state", "uint32"),
         HeaderElement("timestamp", "float32")
@@ -94,9 +100,16 @@ class AcquisitionMetadata:
         return sum(e.nbytes for e in self.header_elements)
 
     @property
-    def n_frames(self) -> int:
+    def n_frames_init(self) -> int:
         """number of frames set for this acquisition + 100"""
         return self.scanimage_meta["hStackManager"]["framesPerSlice"] + 100
+
+    def get_batch_item_path(self, channel_index: int) -> Path:
+        """path to the batch item dir that corresponds to the given channel data"""
+        return Path(self.database).parent.joinpath(self.uuids[channel_index])
+
+    def get_init_path(self, channel_index: int) -> Path:
+        return self.get_batch_item_path(channel_index).joinpath("init.tiff")
 
     @classmethod
     def from_jsons(cls, json_str: bytes, generate_uuid: bool = False):
@@ -173,7 +186,8 @@ class AcquisitionMetadata:
         if path.exists():
             raise FileExistsError(f"header file already exists at given location: {path}")
 
-        n_frames = self.n_frames
+        # set upper limit of 3 hours at 30Hz
+        max_n_frames = 3 * 60 * 60 * 30
 
         with h5py.File(path, "w") as f:
             # store uid
@@ -181,7 +195,7 @@ class AcquisitionMetadata:
 
             # create dataset for each header element which will be stored as 1D array
             for header_element in self.header_elements:
-                f.create_dataset(header_element.name, shape=(n_frames,), dtype=header_element.dtype)
+                f.create_dataset(header_element.name, shape=(max_n_frames,), dtype=header_element.dtype)
 
     def to_dict(self) -> dict:
         return asdict(self)
