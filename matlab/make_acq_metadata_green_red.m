@@ -25,3 +25,6 @@ acq_meta.channels{2}.genotype = "";
 
 % optional comments
 acq_meta.comments = "";
+
+% Set sub-session between every table-round!
+acq_meta.sub_session = 1;
