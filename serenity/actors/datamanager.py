@@ -137,7 +137,8 @@ class ScanImageReceiver(Actor):
         except Exception as e:
             # bad frame, request new one
             self.socket.send("bad frame".encode("utf-8"))
-            logger.error(f"Bad frame after index: {self.last_frame_index}")
+            logger.error(f"Bad frame after index: {self.last_frame_index}\n")
+            logger.error(traceback.format_exc())
             return
         else:
             # good frame, reply frame index
