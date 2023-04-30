@@ -77,6 +77,7 @@ class AcquisitionMetadata:
     channels: Tuple[Channel]
     framerate: float
     date: str
+    sub_session: int
     scanimage_meta: dict = None
     comments: str = None
 

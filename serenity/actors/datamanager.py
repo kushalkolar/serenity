@@ -107,6 +107,10 @@ class ScanImageReceiver(Actor):
         if b is None:
             return
 
+        if b == b"end-acq":
+            self.socket.send(b"acquisition ended")
+            return
+
         # we expect that this is json encoded acq metadata
         if not self.acq_ready:
             try:
