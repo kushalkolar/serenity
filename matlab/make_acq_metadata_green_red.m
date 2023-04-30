@@ -23,5 +23,13 @@ acq_meta.channels{2}.indicator = "rcamp";
 acq_meta.channels{2}.color = "red";
 acq_meta.channels{2}.genotype = "";
 
+% this sub session
+acq_meta.sub_session = 0;
+
 % optional comments
 acq_meta.comments = "";
+
+
+clear frame_sender
+sc = SerenityClient("tcp://127.0.0.1:9005", "C:/Users/scanimage/serenity_buffer");
+sc.prep_acq(acq_meta)

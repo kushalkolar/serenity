@@ -123,7 +123,7 @@ class SerenityServer:
 
     def end_acq(self):
         # tell improv to end acq
-        self.socket.send(b"end-acquisition")
+        self.socket.send(b"end-acq")
 
         send_time = time()
         print("waiting for improv to acknowledge end of acquisition")
@@ -136,11 +136,8 @@ class SerenityServer:
                     self.socket_matlab.send_string(msg)
                     raise TimeoutError(msg)
                 sleep(1)
-                break
             else:
                 print(str(msg))
-                # reply to matlab acq ended
-                self.socket_matlab.send_string("serenity server and improv ended acquisition")
                 break
 
     def send_loop(self):
@@ -181,7 +178,7 @@ class SerenityServer:
                 # reply not yet received
                 except zmq.Again:
                     # if we've waited longer than 20ms for a reply, send again
-                    if now - send_time > 0.03:
+                    if now - send_time > 0.05:
                         self.current_failed_attempt += 1
                         break
                 # reply received, increment to next frame

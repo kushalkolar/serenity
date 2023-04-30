@@ -49,6 +49,8 @@ classdef SerenityClient < handle
             % connect to server, client is in PUSH configuration
             obj.context = ZContext();
             obj.socket = obj.context.createSocket(SocketType.REQ);
+            obj.socket.setReqRelaxed(1);
+            obj.socket.setReqCorrelate(0);
             obj.socket.connect(address);
 
             obj.acq_ready = false;
@@ -117,7 +119,10 @@ classdef SerenityClient < handle
             last_stripe = src.hSI.hDisplay.stripeDataBuffer{src.hSI.hDisplay.stripeDataBufferPointer};
             frame_index = getByteStreamFromArray(uint32(last_stripe.frameNumberAcq));
 
-            % get index of last frame
+            % send index of last frame
+            obj.socket.setReqRelaxed(1);
+            obj.socket.setReqCorrelate(0);
+
             obj.socket.send(frame_index)
 
             % wait for serenity server to end acq
