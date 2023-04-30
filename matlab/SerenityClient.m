@@ -45,6 +45,8 @@ classdef SerenityClient < handle
             import org.zeromq.*;
 
             obj.ZMQ_NOBLOCK = ZMQ.NOBLOCK;
+            
+            obj.address = address;
 
             % connect to server, client is in PUSH configuration
             obj.context = ZContext();
@@ -55,12 +57,17 @@ classdef SerenityClient < handle
 
             obj.acq_ready = false;
             obj.uid = "";
-
-            disp("Successfully connected!")
-            obj.address = address;
-
+            
             obj.parent_buffer_path = parent_buffer_path;
             obj.current_buffer_path = "";
+            
+            disp("Successfully connected!")
+        end
+
+        function reset(obj)
+            obj.socket.setLinger(0);
+            obj.socket.close()
+            obj.socket.connect(obj.address);
         end
 
         function prep_acq(obj, metadata)
@@ -146,6 +153,7 @@ classdef SerenityClient < handle
                 obj.acq_ready = false;
                 obj.uid = "";
                 obj.acq_metadata = "";
+                break
             end
         end
 

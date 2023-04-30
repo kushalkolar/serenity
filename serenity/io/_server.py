@@ -33,6 +33,7 @@ class SerenityServer:
         self.indices_sent = None
         self.current_index_read = None
         self.current_failed_attempt = None
+        self.long_replies: int = 0
         self.retries: int = 0
         self.lingering_files = list()
 
@@ -64,10 +65,12 @@ class SerenityServer:
 
         self.current_index_read = 1
         self.current_failed_attempt: int = 0
-
+        self.long_replies: int = 0
+        
         t = time()
         while True:
             now = time()
+            print("waiting for matlab to send acq metadata")
             # check every second for acquisition metadata
             try:
                 # receive acq metadata from matlab
@@ -93,7 +96,7 @@ class SerenityServer:
                 uid_reply = self.socket.recv_string(zmq.NOBLOCK, encoding="utf-8")
             except zmq.Again:
                 if now - t > 5:
-                    msg = "Failed to receive reply for acquisition metadata, try `start_acq()` again."
+                    msg = "Failed to receive reply from improv for acquisition metadata, try `start_acq()` again."
                     # reply to matlab with uuid
                     self.socket_matlab.send_string(msg)
                     raise TimeoutError(msg)
@@ -145,11 +148,12 @@ class SerenityServer:
 
     def send_loop(self):
         while True:
-            if self.current_index_read % 50 == 0:
+            if self.current_index_read % 50 == 0 and self.current_index_read != 1:
                 clear_output()
                 print(
                     f"frames sent: {self.current_index_read}\n"
                     f"retries: {self.retries}\n"
+                    f"long replies: {self.long_replies}\n"
                     f"reply received: {self.current_index_read}"
                 )
             
@@ -180,9 +184,10 @@ class SerenityServer:
                     reply = self.socket.recv(zmq.NOBLOCK)
                 # reply not yet received
                 except zmq.Again:
-                    # if we've waited longer than 20ms for a reply, send again
-                    if now - send_time > 0.05:
+                    # if we've waited longer than 30ms for a reply, send again
+                    if now - send_time > 0.03:
                         self.current_failed_attempt += 1
+                        self.long_replies += 1
                         break
                 # reply received, increment to next frame
                 else:
