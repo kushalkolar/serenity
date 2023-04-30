@@ -194,7 +194,7 @@ class TwoPhotonFrame:
             for header_element in self.acq_meta.header_elements:
                 val = getattr(self, header_element.name)
                 # since it will be an array of size 1
-                f[header_element.name][self.index] = val.item()
+                f[header_element.name][self.index - 1] = val.item()
 
     def __eq__(self, other):
         """
