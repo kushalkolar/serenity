@@ -8,16 +8,16 @@ ADD_COLUMNS = [
     "date",
     "channel_index",
     "channel_name",
-    "channel_colors",
+    "channel_color",
     "channel_genotype",
     "channel_indicator"
 ]
 
 
-def load_batch(path, file_format="parquet"):
+def load_batch(path, file_format="hdf"):
     """thin wrapper around mesmerize_core.load_batch"""
     return mesmerize_core.load_batch(path, file_format=file_format)
 
 
-def create_batch(path, file_format="parquet"):
+def create_batch(path, file_format="hdf"):
     return mesmerize_core.create_batch(path, file_format=file_format, add_columns=ADD_COLUMNS)

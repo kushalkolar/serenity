@@ -94,6 +94,10 @@ class AcquisitionMetadata:
     def nbytes_header(self) -> int:
         return sum(e.nbytes for e in self.header_elements)
 
+    def get_batch_item_path(self, channel_index: int) -> Path:
+        """path to the batch item dir that corresponds to the given channel data"""
+        return Path(self.database).parent.joinpath(self.uuids[channel_index])
+
     @property
     def n_frames(self) -> int:
         """number of frames set for this acquisition + 100"""

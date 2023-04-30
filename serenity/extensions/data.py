@@ -96,18 +96,23 @@ class AcquisitionDataFrameExtensions:
             # path relative to batch_dir
             relative_input_movie_path = self._dataframe.paths.split(input_movie_path)[1]
 
+            item_name = f"{acq_meta.animal_id}_{acq_meta.date}"
+
             s = pd.Series(
                 {
                     "uuid": uid,
+                    "item_name": item_name,
                     "input_movie_path": str(relative_input_movie_path),
                     "algo": "onacid",
+                    "params": {"main": None},  # parquet doesn't support empty dicts
                     "animal_id": acq_meta.animal_id,
                     "framerate": acq_meta.framerate,
                     "date": acq_meta.date,
+                    "sub_session": acq_meta.sub_session,
                     "comments": acq_meta.comments,
                     "channel_index": channel.index,
                     "channel_name": channel.name,
-                    "channel_colors": channel.color,
+                    "channel_color": channel.color,
                     "channel_genotype": channel.genotype,
                     "channel_indicator": channel.indicator,
                 }
@@ -128,6 +133,7 @@ class AcquisitionDataFrameExtensions:
             self._dataframe.loc[self._dataframe.index.size] = s
 
             # Save DataFrame to disk
-            self._dataframe.to_parquet(self._dataframe.paths.get_batch_path())
+
+            self._dataframe.to_hdf(self._dataframe.paths.get_batch_path(), key="batch", mode="a")
 
         return input_movie_paths, header_paths

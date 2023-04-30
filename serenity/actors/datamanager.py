@@ -4,6 +4,7 @@ import logging
 from collections import deque
 from pathlib import Path
 import traceback
+import json
 
 import pandas as pd
 from mesmerize_core import load_batch
@@ -109,12 +110,20 @@ class ScanImageReceiver(Actor):
 
         if b == b"end-acq":
             self.socket.send(b"acquisition ended")
+            self.q_out.put(b"end-acq")
             return
 
         # we expect that this is json encoded acq metadata
         if not self.acq_ready:
             try:
                 self.acq_meta = AcquisitionMetadata.from_jsons(b, generate_uuid=True)
+
+                # make sure mesmerize database is valid
+                if not Path(self.acq_meta.database).exists():
+                    self.socket.send(b"database does not exist")
+                    self.acq_meta = None
+                    self.acq_ready = True
+                    return
 
                 # reply to socket
                 # just send the first uid if using two channels, doesn't matter for matlab
@@ -155,11 +164,13 @@ class ScanImageReceiver(Actor):
             # MUST be numpy array, else to_bytes doesn't work!
             frame.trial_index = np.array([self.current_trial_index], dtype=np.uint32)
             self.q_out.put(frame.to_bytes())
+            # frame has been received and sent for writing
+            self.received_indices.append(frame.index)
             self.last_frame_index = frame.index
         # in case a frame was received but the reply wasn't received on the other end
-        else:
-            # send reply again
-            self._reply_frame_received(frame.index)
+        # else:
+        #     # send reply again
+        #     self._reply_frame_received(frame.index)
 
 
 class MesmerizeWriter(Actor):
@@ -189,6 +200,8 @@ class MesmerizeWriter(Actor):
         self.header_paths: List[Path] = None
 
         self.dataframe: pd.DataFrame = None
+        # frame index, array of 1 element
+        self.current_frame_ix: np.ndarray = None
 
     def setup(self):
         logger.info("Mesmerize Writer ready")
@@ -211,16 +224,21 @@ class MesmerizeWriter(Actor):
         """
         Reset the state of this actor to get ready for next acquisition
         """
+        if hasattr(self, "writers"):
+            for i, writer in enumerate(self.writers):
+                writer.close()
+                shape = list((self.current_frame_ix.item(), *self.acq_meta.channels[i].shape))
+                path = self.acq_meta.get_batch_item_path(channel_index=i)
+                json.dump(shape, open(path.joinpath("shape.json"), "w"))
+
         self.acq_meta: AcquisitionMetadata = None
         self.writers: List[tifffile.TiffWriter] = None
         self.movie_paths: List[Path] = None
         self.header_paths: List[Path] = None
+        self.current_frame_ix: int = None
 
     def stop(self):
-        for w in self.writers:
-            w.close()
-
-        return 0
+        self._reset()
 
     def _setup_new_acq(self, bytes_acq_meta):
         self.acq_meta = AcquisitionMetadata.from_jsons(bytes_acq_meta)
@@ -228,7 +246,7 @@ class MesmerizeWriter(Actor):
         logger.info(f"********** UUID in mesmerize writer ********\n{self.acq_meta.uuids}")
 
         # load mesmerize dataframe
-        self.dataframe = load_batch(self.acq_meta.database, file_format="parquet")
+        self.dataframe = load_batch(self.acq_meta.database, file_format="hdf")
 
         self.movie_paths, self.header_paths = self.dataframe.acq.add_item(acq_meta=self.acq_meta)
 
@@ -252,6 +270,10 @@ class MesmerizeWriter(Actor):
 
             return
 
+        if b == b"end-acq":
+            self._reset()
+            return
+
         frame = TwoPhotonFrame.from_bytes(b, self.acq_meta)
 
         for i, (writer, channel_data) in enumerate(zip(self.writers, frame.channels)):
@@ -259,3 +281,4 @@ class MesmerizeWriter(Actor):
 
             # append header of current frame to header file
             frame.append_header_file(self.header_paths[i], channel=i)
+            self.current_frame_ix = frame.index
