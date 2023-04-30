@@ -1,5 +1,8 @@
 from dataclasses import dataclass
 from typing import *
+from pathlib import Path
+
+import h5py
 import numpy as np
 
 from ._metadata import AcquisitionMetadata
@@ -41,7 +44,8 @@ class TwoPhotonFrame:
     def from_bytes(
             cls,
             data: bytes | bytearray,
-            acq_meta: AcquisitionMetadata
+            acq_meta: AcquisitionMetadata,
+            from_matlab: bool = False
     ):
         """
         Create ``TwoPhotonFrame`` using raw bytes. Parses header and channel data.
@@ -56,12 +60,22 @@ class TwoPhotonFrame:
         acq_meta: AcquisitionMetadata
             acquisition metadata, required to parse the header
 
+        from_matlab: bool
+            if these bytes are from matlab,
+            compensates for the additional bytes that matlab adds to each header element
+
         """
 
         header_parsed = dict()
 
         # parse header
         start_byte = 0
+
+        if from_matlab:
+            # since matlab adds 60 bits of something as a header to each header element
+            # only the last 4 bytes are our actual header element value
+            start_byte += 60
+
         for element in acq_meta.header_elements:
             # parse the header for this element
             header_parsed[element.name] = np.frombuffer(
@@ -72,10 +86,16 @@ class TwoPhotonFrame:
             )
 
             # jump to next header element
-            start_byte = start_byte + element.nbytes
+            start_byte += element.nbytes
+
+            # add the 60 bits for matlab weirdness
+            if from_matlab:
+                start_byte += 60
 
         # parse channels
-        start_byte = acq_meta.nbytes_header
+        if not from_matlab:
+            start_byte = acq_meta.nbytes_header
+
         channels: List[np.ndarray] = list()
 
         for channel in acq_meta.channels:
@@ -156,6 +176,25 @@ class TwoPhotonFrame:
             b.extend(channel)
 
         return b
+
+    def append_header_file(self, path: Path | str, channel: int):
+        """
+        Append header information from this frame to the header file at the given path
+        """
+        path = Path(path)
+        if not path.exists():
+            raise FileExistsError(f"header does not exist at given location: {path}")
+
+        with h5py.File(path, "r+") as f:
+            if not f.attrs["uuid"] == str(self.acq_meta.uuids[channel]):
+                raise ValueError(
+                    "acquisition uid of the given header file does not "
+                    "match the acquisition uid of the current frame"
+                )
+            for header_element in self.acq_meta.header_elements:
+                val = getattr(self, header_element.name)
+                # since it will be an array of size 1
+                f[header_element.name][self.index - 1] = val.item()
 
     def __eq__(self, other):
         """
