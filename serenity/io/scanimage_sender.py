@@ -4,7 +4,7 @@ from time import time, sleep
 
 import numpy as np
 import zmq
-from IPython.display import clear_output
+from IPython.display import display, clear_output
 
 
 class SerenityServer:
@@ -23,6 +23,7 @@ class SerenityServer:
         # for receiving acq metadata from matlab
         self.context_matlab = zmq.Context()
         self.socket_matlab = self.context_matlab.socket(zmq.REP)
+        self.socket_matlab.setsockopt(zmq.LINGER, 0)
         self.socket_matlab.bind(address_matlab)
 
         # frame buffer on SSD
@@ -39,6 +40,7 @@ class SerenityServer:
         self.current_uid = None
 
         self.acq_ended = None
+        self._abort = False
         self.last_frame_ix = None
 
     def close(self):
@@ -109,8 +111,6 @@ class SerenityServer:
 
         self.acq_ended = False
         self.last_frame_ix = None
-        
-        print("starting send loop")
         self.send_loop()
 
     def _check_end_acq(self):
@@ -119,13 +119,17 @@ class SerenityServer:
         except zmq.Again:
             pass
         else:
+            if frame_ix == b"abort":
+                # abort acq
+                self.abort()
+                return
             self.last_frame_ix = np.frombuffer(frame_ix, offset=60, count=1, dtype=np.uint32).item()
             print(self.last_frame_ix)
             self.acq_ended = True
 
     def end_acq(self):
         # tell improv to end acq
-        self.socket.send(b"end-acq")
+        self.socket.send(b"acqend")
 
         send_time = time()
         print("waiting for improv to acknowledge end of acquisition")
@@ -138,27 +142,56 @@ class SerenityServer:
                     self.socket_matlab.send_string(msg)
                     raise TimeoutError(msg)
                 sleep(1)
-            else:
-                print(f"improv says: {msg}")
-                self.socket_matlab.send_string("serenity and improv ended acquisition")
                 break
+            else:
+                print(f"improv says: {str(msg)}")
+                # reply to matlab acq ended
+                self.socket_matlab.send_string("serenity server and improv ended acquisition")
+                break
+                
+    def abort(self):
+        # if abort signal received from matlab
+        self.acq_ended = True
+        self._abort = True
+    
+    def reset(self):
+        self.current_buffer_path: Path = None
 
+        self.indices_received = None
+        self.indices_sent = None
+        self.current_index_read = None
+        self.current_failed_attempt = None
+        self.retries: int = 0
+        self.lingering_files = list()
+
+        self.current_uid = None
+
+        self.acq_ended = None
+        self._abort = False
+        self.last_frame_ix = None
+    
     def send_loop(self):
         while True:
             if self.current_index_read % 50 == 0:
-                clear_output()
-                print(
-                    f"frames sent: {self.current_index_read}\n"
-                    f"retries: {self.retries}\n"
-                    f"reply received: {self.current_index_read}"
-                )
+                # clear_output()
+                # print(
+                #     f"frame sent: {self.current_index_read}\n"
+                #     f"retries: {self.retries}\n"
+                #     f"frame received: {self.current_index_read - 1}"
+                # )
             
-            # check if scanimage acq has ended
+            # check if scanimage acq has ended or if abort is sent
             self._check_end_acq()
 
             if self.acq_ended:
+                if self._abort:
+                    self.reset()
+                    break
+                
+                # reply has been received for the last frame, end
                 if self.current_index_read > self.last_frame_ix:
                     self.end_acq()
+                    self.reset()
                     break
 
             data = self._read_frame_buffer(self.current_index_read)
@@ -166,7 +199,7 @@ class SerenityServer:
             # if frame buffer not yet ready for this index
             if data is None:
                 # sleep for 2ms and go back to the top of the loop
-                sleep(0.005)
+                sleep(0.002)
                 continue
                 
             self.socket.send(data)
@@ -181,7 +214,7 @@ class SerenityServer:
                 # reply not yet received
                 except zmq.Again:
                     # if we've waited longer than 20ms for a reply, send again
-                    if now - send_time > 0.05:
+                    if now - send_time > 0.03:
                         self.current_failed_attempt += 1
                         break
                 # reply received, increment to next frame
@@ -200,24 +233,17 @@ class SerenityServer:
                     self.current_index_read += 1
                     self.current_failed_attempt = 0
                     break
+                    
+        self.reset()
 
     def _get_frame_buffer_path(self, index: int):
         return self.buffer_path.joinpath(self.current_uid, f"{index}.bin")
-    
-    def _get_frame_done_path(self, index: int):
-        return self.buffer_path.joinpath(self.current_uid, f"{index}.done")
 
     def _remove_from_from_buffer(self, index):
         frame_buffer_path = self._get_frame_buffer_path(index)
         frame_buffer_path.unlink()
-        
-        self._get_frame_done_path(index).unlink()
 
     def _read_frame_buffer(self, index: int):
-        done_file = self._get_frame_done_path(index)
-        if not done_file.exists():
-            return None
-        
         frame_buffer_path = self._get_frame_buffer_path(index)
         # frame not yet written
         if not frame_buffer_path.exists():

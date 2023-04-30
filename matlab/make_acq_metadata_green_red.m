@@ -31,5 +31,7 @@ acq_meta.comments = "";
 
 
 clear frame_sender
+clear write_buffer
 sc = SerenityClient("tcp://127.0.0.1:9005", "C:/Users/scanimage/serenity_buffer");
 sc.prep_acq(acq_meta)
+hSI.startGrab()

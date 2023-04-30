@@ -129,6 +129,8 @@ classdef SerenityClient < handle
             tic;
             % wait for server to acknowledge
             while true
+                obj.socket.setReqRelaxed(1);
+                obj.socket.setReqCorrelate(0);
                 reply = obj.socket.recv(obj.ZMQ_NOBLOCK);
                 if toc > 30
                     error("Timeout exceeded for confirming acquisition end")
